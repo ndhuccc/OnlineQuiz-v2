@@ -1,0 +1,30 @@
+[
+  {
+    "node": "Algebra",
+    "question_type": "Concept",
+    "format": "Single Choice",
+    "question": "What is the value of $2 + 3$?",
+    "options": [
+      "A. 4",
+      "B. 5",
+      "C. 6",
+      "D. 7"
+    ],
+    "correct_answer": "B",
+    "explanation": "Adding 2 and 3 gives 5."
+  },
+  {
+    "node": "Geometry",
+    "question_type": "Reasoning",
+    "format": "Multiple Choice",
+    "question": "Which of the following are right triangle side sets?",
+    "options": [
+      "A. 3, 4, 5",
+      "B. 5, 12, 13",
+      "C. 2, 3, 4",
+      "D. 8, 15, 17"
+    ],
+    "correct_answer": "ABD",
+    "explanation": "These sets satisfy the Pythagorean theorem."
+  }
+]

@@ -1,0 +1,8 @@
+django>=5.0,<6
+djangorestframework>=3.15
+flask>=3.0
+pydantic>=2.0
+python-dotenv>=1.0
+pytest>=8.0
+pytest-django>=4.8
+waitress>=3.0

@@ -6,7 +6,13 @@ __pycache__/
 venv/
 
 # Build / cache
-dist/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+backend/staticfiles/
+data/*.db
+data/*.db-*
 build/
 .cache/
 *.log
@@ -15,6 +21,7 @@ build/
 .env
 .env.*
 !.env.example
+!frontend/.env.development
 
 # IDE / OS
 .idea/
