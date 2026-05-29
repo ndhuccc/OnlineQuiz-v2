@@ -223,6 +223,44 @@ def _schedule_timeout_after_request(session_id: int, question_index: int, ends_a
     threading.Thread(target=work, daemon=True, name="quiz-schedule-timeout").start()
 
 
+def _close_options_phase(session: QuizSession, question: Question) -> None:
+    """結束本題 options 階段（逾時、全員提交或手動縮時至 0）。"""
+    finalize_question_answers(session, question)
+    session.current_phase = QuizSession.Phase.CLOSED
+    _clear_phase_timer(session)
+    session.save(
+        update_fields=["current_phase", "phase_started_at", "phase_timer_seconds", "phase_ends_at"]
+    )
+    timer_service.cancel(session.id, session.current_question_index)
+    push_question_stats(session)
+    _emit_phase_deferred(session)
+
+
+def try_close_options_if_all_answered(session: QuizSession, question: Question) -> bool:
+    """若全部參與者皆已提交，提前結束本題作答。"""
+    sid = session.id
+    q_index = session.current_question_index
+    with session_mutex(sid):
+        with transaction.atomic():
+            session.refresh_from_db()
+            if session.current_phase != QuizSession.Phase.OPTIONS:
+                return False
+            if session.current_question_index != q_index:
+                return False
+            current = session.current_question()
+            if not current or current.id != question.id:
+                return False
+            total = session.participants.count()
+            if total == 0:
+                return False
+            submitted = Answer.objects.filter(session=session, question=question).count()
+            if submitted < total:
+                return False
+            _close_options_phase(session, question)
+            return True
+    return False
+
+
 def handle_phase_timeout(session_id: int, question_index: int) -> None:
     close_old_connections()
     with session_mutex(session_id):
@@ -243,15 +281,16 @@ def _handle_phase_timeout_locked(session_id: int, question_index: int) -> None:
     if not question:
         return
 
-    finalize_question_answers(session, question)
+    _close_options_phase(session, question)
 
-    session.current_phase = QuizSession.Phase.CLOSED
-    _clear_phase_timer(session)
-    session.save(
-        update_fields=["current_phase", "phase_started_at", "phase_timer_seconds", "phase_ends_at"]
-    )
-    timer_service.cancel(session.id, session.current_question_index)
-    push_question_stats(session)
+
+def adjust_timer(session: QuizSession, timer_seconds: int) -> QuizSession:
+    sid = session.id
+    with session_mutex(sid):
+        with transaction.atomic():
+            _adjust_timer_locked(session, timer_seconds)
+            session.refresh_from_db()
+    return session
 
 
 @transaction.atomic
@@ -337,24 +376,24 @@ def _set_phase_locked(
         raise SessionError(f"不支援的階段：{phase}")
 
 
-def adjust_timer(session: QuizSession, timer_seconds: int) -> QuizSession:
-    sid = session.id
-    with session_mutex(sid):
-        with transaction.atomic():
-            _adjust_timer_locked(session, timer_seconds)
-            session.refresh_from_db()
-    return session
-
-
 def _adjust_timer_locked(session: QuizSession, timer_seconds: int) -> None:
     if session.current_phase != QuizSession.Phase.OPTIONS:
         raise SessionError("僅選項作答階段可調整計時")
-    if timer_seconds < 5:
-        raise SessionError("至少增加 5 秒")
+    if timer_seconds == 0:
+        raise SessionError("秒數不可為 0")
+
+    question = session.current_question()
+    if not question:
+        raise SessionError("沒有進行中的題目")
 
     now = timezone.now()
     current = compute_phase_remaining_seconds(session, now) or 0
     new_remaining = current + timer_seconds
+
+    if new_remaining <= 0:
+        _close_options_phase(session, question)
+        return
+
     session.phase_ends_at = now + timedelta(seconds=new_remaining)
     if session.phase_started_at:
         elapsed = int((now - session.phase_started_at).total_seconds())

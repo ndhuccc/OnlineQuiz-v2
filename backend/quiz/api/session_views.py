@@ -24,6 +24,7 @@ from quiz.services.session_fsm import (
     set_phase,
     start_session,
     stem_payload,
+    try_close_options_if_all_answered,
 )
 from quiz.services.session_fsm import push_question_stats
 from quiz.services.stats import question_stats_payload, session_summary_payload
@@ -316,6 +317,8 @@ def participant_me_submit(request):
         )
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    try_close_options_if_all_answered(session, question)
 
     broadcast(
         session.id,

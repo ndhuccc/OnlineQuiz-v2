@@ -25,7 +25,12 @@ class PhaseSerializer(serializers.Serializer):
 
 
 class TimerAdjustSerializer(serializers.Serializer):
-    timer_seconds = serializers.IntegerField(min_value=5, max_value=3600)
+    timer_seconds = serializers.IntegerField(min_value=-3600, max_value=3600)
+
+    def validate_timer_seconds(self, value):
+        if value == 0:
+            raise serializers.ValidationError("秒數不可為 0")
+        return value
 
 
 class RescueStudentSerializer(serializers.Serializer):

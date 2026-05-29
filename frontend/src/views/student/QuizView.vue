@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import MathText from "@/components/MathText.vue";
 import StudentLayout from "@/components/StudentLayout.vue";
 import TimerBar from "@/components/TimerBar.vue";
-import { mergeTimerFields, studentPollIntervalMs, usePhaseCountdown } from "@/composables/usePhaseCountdown";
+import { mergeTimerFields, studentLobbyPollIntervalMs, studentPollIntervalMs, usePhaseCountdown } from "@/composables/usePhaseCountdown";
 import { authHeaders, clearClientToken, getClientToken, saveClientToken } from "@/composables/useAuth";
 import { parseJsonResponse } from "@/utils/parseJsonResponse";
 
@@ -15,6 +15,7 @@ const state = ref(null);
 const questionType = ref("single");
 const options = ref([]);
 const optionsRevealed = ref(false);
+const revealedQuestionId = ref(null);
 const selectedIds = ref([]);
 const message = ref("");
 const error = ref("");
@@ -28,43 +29,69 @@ let clientToken = getClientToken();
 let pollTimer = null;
 let pollSeq = 0;
 
+function isLobbyPolling() {
+  return phase.value === "quiz" && Boolean(clientToken) && isLobbyWaiting.value;
+}
+
+function isTimerPolling() {
+  return (
+    phase.value === "quiz" &&
+    Boolean(clientToken) &&
+    isAnswering.value &&
+    optionsRevealed.value &&
+    !submitted.value
+  );
+}
+
+function shouldPoll() {
+  return isLobbyPolling() || isTimerPolling();
+}
+
 function currentPollIntervalMs() {
-  return studentPollIntervalMs({
-    isAnswering: isAnswering.value,
-    optionsRevealed: optionsRevealed.value,
-    submitted: submitted.value,
-  });
+  if (isLobbyPolling()) return studentLobbyPollIntervalMs();
+  return studentPollIntervalMs();
 }
 
 const { remainingSec, syncClock, stopClock } = usePhaseCountdown(
   () => state.value,
-  () => isAnswering.value,
+  () => isAnswering.value && optionsRevealed.value && !submitted.value,
 );
 
 const isRunning = computed(() => state.value?.status === "running");
 const isLobbyWaiting = computed(() => state.value?.status === "lobby");
+const isSummary = computed(() => state.value?.status === "summary");
+const isReviewOpen = computed(() => state.value?.status === "review");
 const isMultiple = computed(() => questionType.value === "multiple");
 const isAnswering = computed(() => state.value?.current_phase === "options");
 const isStem = computed(() => state.value?.current_phase === "stem");
 const isClosed = computed(() => state.value?.current_phase === "closed");
-const showActionPanel = computed(
+const showRevealButton = computed(
   () =>
     Boolean(state.value) &&
-    !submitted.value &&
-    !isClosed.value &&
-    (isLobbyWaiting.value || isRunning.value),
+    !isReviewOpen.value &&
+    ((isRunning.value && !isLobbyWaiting.value) || isSummary.value),
 );
-const canRevealOptions = computed(
-  () => isAnswering.value && !optionsRevealed.value && !loadingOptions.value,
+const showAnswerPanel = computed(
+  () => Boolean(state.value) && isRunning.value && !isLobbyWaiting.value && optionsRevealed.value,
 );
 const canSubmit = computed(
-  () => isAnswering.value && optionsRevealed.value && selectedIds.value.length > 0,
+  () =>
+    isAnswering.value &&
+    optionsRevealed.value &&
+    !submitted.value &&
+    selectedIds.value.length > 0,
 );
 const questionNumber = computed(() => (state.value?.current_question_index ?? 0) + 1);
 
 const statusHint = computed(() => {
   if (state.value?.status === "lobby") {
     return "測驗尚未開始，請等待教師指示。";
+  }
+  if (isReviewOpen.value) {
+    return "教師已開放複習，請按下 Open Review 查看成績與解析。";
+  }
+  if (isSummary.value) {
+    return "測驗已結束，請按下「取得答案選項」確認是否已開放複習。";
   }
   if (isStem.value) {
     return "請看投影幕上的題目，題幹不會顯示在此裝置。";
@@ -115,9 +142,10 @@ function stopPolling() {
 
 function scheduleNextPoll() {
   stopPolling();
-  if (phase.value !== "quiz" || !clientToken) return;
+  if (!shouldPoll()) return;
   pollTimer = setTimeout(async () => {
-    await me().catch(() => {});
+    if (!shouldPoll()) return;
+    await pollFromServer().catch(() => {});
     scheduleNextPoll();
   }, currentPollIntervalMs());
 }
@@ -127,8 +155,8 @@ function startPolling() {
 }
 
 function onVisibilityChange() {
-  if (document.visibilityState === "visible" && phase.value === "quiz" && clientToken) {
-    me().catch(() => {});
+  if (document.visibilityState === "visible" && shouldPoll()) {
+    pollFromServer().catch(() => {});
   }
 }
 
@@ -154,23 +182,35 @@ async function tryResumeSession(expectedJoinCode = "") {
 
 function enterQuizPhase() {
   phase.value = "quiz";
-  startPolling();
-  me().catch(() => {});
+  me()
+    .catch(() => {})
+    .finally(() => {
+      if (shouldPoll()) startPolling();
+    });
 }
 
 function resetQuestionUi() {
   optionsRevealed.value = false;
+  revealedQuestionId.value = null;
   options.value = [];
   selectedIds.value = [];
   submitted.value = false;
   message.value = "";
 }
 
+function isSameOptionSet(previous, next) {
+  if (!previous?.length || !next?.length) return false;
+  if (previous.length !== next.length) return false;
+  return previous.every((opt, index) => opt.id === next[index]?.id);
+}
+
 watch(
-  () => [state.value?.current_phase, optionsRevealed.value, submitted.value],
+  () => [isLobbyWaiting.value, isAnswering.value, optionsRevealed.value, submitted.value],
   () => {
-    if (phase.value === "quiz" && clientToken) {
-      scheduleNextPoll();
+    if (shouldPoll()) {
+      startPolling();
+    } else {
+      stopPolling();
     }
   },
 );
@@ -222,15 +262,15 @@ async function join() {
   }
 }
 
-async function me() {
-  if (!clientToken) return;
+async function fetchParticipantState({ showSyncing = true } = {}) {
+  if (!clientToken) return null;
   const seq = ++pollSeq;
-  syncing.value = true;
+  if (showSyncing) syncing.value = true;
   try {
     const res = await fetch("/api/participants/me/", {
       headers: authHeaders(clientToken),
     });
-    if (seq !== pollSeq) return;
+    if (seq !== pollSeq) return null;
     if (res.status === 401 || res.status === 403) {
       clientToken = null;
       clearClientToken();
@@ -238,54 +278,118 @@ async function me() {
       phase.value = "join";
       state.value = null;
       error.value = "登入已失效，請重新輸入學號與姓名加入場次。";
-      return;
+      return null;
     }
     const data = await parseJsonResponse(res).catch(() => null);
-    if (seq !== pollSeq) return;
+    if (seq !== pollSeq) return null;
     if (!res.ok || !data) {
-      error.value = data?.detail || "無法同步場次狀態，請稍後再試。";
-      return;
+      if (showSyncing) {
+        error.value = data?.detail || "無法同步場次狀態，請稍後再試。";
+      }
+      return null;
     }
-    error.value = "";
-    const prevIndex = state.value?.current_question_index;
-    applyParticipantState(data);
-    if (data.current_question_index !== prevIndex) {
-      resetQuestionUi();
-      submitted.value = Boolean(data.has_answered);
-    } else {
-      submitted.value = Boolean(data.has_answered);
-    }
+    if (showSyncing) error.value = "";
+    return data;
   } finally {
-    if (seq === pollSeq) syncing.value = false;
+    if (seq === pollSeq && showSyncing) syncing.value = false;
   }
 }
 
-async function revealOptions() {
-  if (submitted.value || optionsRevealed.value || loadingOptions.value) return;
-  if (!isAnswering.value) {
-    error.value = "教師尚未開放選項，請稍候或按下方重新整理。";
-    await me().catch(() => {});
+function applyParticipantAnswerState(data) {
+  const prevIndex = state.value?.current_question_index;
+  applyParticipantState(data);
+  if (data.current_question_index !== prevIndex) {
+    resetQuestionUi();
+  }
+  submitted.value = Boolean(data.has_answered);
+}
+
+async function me() {
+  const data = await fetchParticipantState({ showSyncing: true });
+  if (!data) return;
+  applyParticipantAnswerState(data);
+}
+
+async function pollFromServer() {
+  const data = await fetchParticipantState({ showSyncing: false });
+  if (!data) return;
+  if (isLobbyPolling() || data.status !== state.value?.status) {
+    applyParticipantAnswerState(data);
     return;
   }
+  const prevIndex = state.value?.current_question_index;
+  const prevPhase = state.value?.current_phase;
+  if (data.current_question_index !== prevIndex || data.current_phase !== prevPhase) {
+    applyParticipantAnswerState(data);
+    return;
+  }
+  state.value = mergeTimerFields(state.value, data);
+  submitted.value = Boolean(data.has_answered);
+  syncClock();
+}
+
+async function revealOptions() {
+  if (loadingOptions.value) return;
+  if (!clientToken) return;
   error.value = "";
   loadingOptions.value = true;
+  const previousOptions = options.value;
+  const wasSubmitted = submitted.value;
   try {
+    const meData = await fetchParticipantState({ showSyncing: false });
+    if (!meData) return;
+    applyParticipantAnswerState(meData);
+
+    if (meData.status === "review") {
+      message.value = "教師已開放複習，請查看成績與解析。";
+      stopPolling();
+      return;
+    }
+
+    if (meData.current_phase !== "options") {
+      message.value = isSummary.value
+        ? "測驗已結束，教師尚未開放複習，請稍候再試。"
+        : isClosed.value
+          ? "本題已結束，請等待教師進入下一題。"
+          : "教師尚未開放選項，請稍候。";
+      return;
+    }
+
     const res = await fetch("/api/participants/me/options/", {
       method: "POST",
       headers: authHeaders(clientToken),
     });
     const data = await parseJsonResponse(res);
     if (!res.ok) throw new Error(data.detail || "無法取得答案選項。");
-    options.value = data.options;
+    const newOptions = data.options ?? [];
+    const isStillSameQuestion =
+      isSameOptionSet(previousOptions, newOptions) ||
+      (revealedQuestionId.value != null &&
+        data.question_id != null &&
+        revealedQuestionId.value === data.question_id);
+
+    options.value = newOptions;
     questionType.value = data.type;
     optionsRevealed.value = true;
+    revealedQuestionId.value = data.question_id ?? null;
+    selectedIds.value = [];
+
+    if (isStillSameQuestion && wasSubmitted) {
+      submitted.value = true;
+      stopPolling();
+    } else {
+      submitted.value = false;
+      message.value = "";
+      startPolling();
+    }
+
     if (data.phase_timer_seconds != null) {
       activeTimerTotal.value = data.phase_timer_seconds;
       state.value = mergeTimerFields(state.value, data);
     }
     syncClock();
   } catch (e) {
-    error.value = String(e);
+    error.value = String(e.message || e);
   } finally {
     loadingOptions.value = false;
   }
@@ -315,6 +419,7 @@ async function submit() {
     if (!res.ok) throw new Error(data.detail || "提交失敗。");
     submitted.value = true;
     message.value = "已送出答案，請等待教師繼續。";
+    stopPolling();
   } catch (e) {
     error.value = String(e.message || e);
   }
@@ -410,13 +515,17 @@ onUnmounted(() => {
               {{
                 isLobbyWaiting
                   ? "大廳等候"
-                  : isStem
-                    ? "題幹階段"
-                    : isAnswering
-                      ? "作答中"
-                      : isClosed
-                        ? "本題結束"
-                        : state?.status
+                  : isReviewOpen
+                    ? "複習開放"
+                    : isSummary
+                      ? "測驗結束"
+                      : isStem
+                        ? "題幹階段"
+                        : isAnswering
+                          ? "作答中"
+                          : isClosed
+                            ? "本題結束"
+                            : state?.status
               }}
             </span>
           </p>
@@ -434,23 +543,26 @@ onUnmounted(() => {
           已成功加入，請等待教師開始測驗。
         </div>
 
-        <div v-if="showActionPanel" class="card space-y-3">
+        <div v-if="isSummary && !isReviewOpen" class="card text-center text-sm text-slate-600">
+          測驗已全部結束，請等待教師開放複習。
+        </div>
+
+        <div v-if="showRevealButton" class="card space-y-3">
           <button
             type="button"
             class="btn-primary w-full min-h-[52px] text-base"
-            :disabled="!canRevealOptions"
+            :disabled="loadingOptions"
             @click="revealOptions().catch((e) => (error = String(e)))"
           >
             {{ loadingOptions ? "載入中..." : "取得答案選項" }}
           </button>
-          <p v-if="isLobbyWaiting" class="text-center text-xs text-slate-500">
-            測驗尚未開始，請等待教師按 Begin Quiz。
-          </p>
-          <p v-else-if="isStem" class="text-center text-xs text-slate-500">
+          <p v-if="isStem" class="text-center text-xs text-slate-500">
             教師尚未開放選項，請先看投影幕上的題幹。
           </p>
+        </div>
 
-          <div v-if="optionsRevealed && options.length" class="space-y-2">
+        <div v-if="showAnswerPanel && !submitted" class="card space-y-3">
+          <div v-if="options.length" class="space-y-2">
             <button
               v-for="opt in options"
               :key="opt.id"
@@ -480,7 +592,7 @@ onUnmounted(() => {
           >
             提交答案
           </button>
-          <p v-if="optionsRevealed && !selectedIds.length" class="text-center text-xs text-slate-500">
+          <p v-if="!selectedIds.length" class="text-center text-xs text-slate-500">
             請先選擇至少一個選項。
           </p>
         </div>
@@ -488,11 +600,11 @@ onUnmounted(() => {
         <p v-if="submitted" class="card bg-green-50 text-green-800">{{ message }}</p>
 
         <router-link
-          v-if="state?.status === 'review'"
+          v-if="isReviewOpen"
           to="/student/review"
-          class="btn-primary flex w-full items-center justify-center"
+          class="btn-primary flex w-full min-h-[52px] items-center justify-center text-base"
         >
-          查看複習
+          Open Review
         </router-link>
 
         <p v-if="error" class="text-sm text-red-600">{{ error }}</p>

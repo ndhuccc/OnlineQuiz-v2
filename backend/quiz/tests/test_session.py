@@ -384,6 +384,95 @@ def test_adjust_timer_adds_remaining_seconds(session_setup):
 
 
 @pytest.mark.django_db
+def test_adjust_timer_negative_shortens(session_setup):
+    api = APIClient()
+    host = session_setup.host_token
+    api.post(f"/api/sessions/{session_setup.id}/start/", HTTP_AUTHORIZATION=f"Bearer {host}")
+    api.post(
+        f"/api/sessions/{session_setup.id}/phase/",
+        {"phase": "options", "timer_seconds": 60},
+        HTTP_AUTHORIZATION=f"Bearer {host}",
+        format="json",
+    )
+    data = api.patch(
+        f"/api/sessions/{session_setup.id}/timer/",
+        {"timer_seconds": -20},
+        HTTP_AUTHORIZATION=f"Bearer {host}",
+        format="json",
+    ).json()
+    assert 38 <= data["phase_remaining_seconds"] <= 42
+
+
+@pytest.mark.django_db
+def test_adjust_timer_negative_closes_when_zero(session_setup):
+    api = APIClient()
+    host = session_setup.host_token
+    api.post(f"/api/sessions/{session_setup.id}/start/", HTTP_AUTHORIZATION=f"Bearer {host}")
+    api.post(
+        f"/api/sessions/{session_setup.id}/phase/",
+        {"phase": "options", "timer_seconds": 30},
+        HTTP_AUTHORIZATION=f"Bearer {host}",
+        format="json",
+    )
+    data = api.patch(
+        f"/api/sessions/{session_setup.id}/timer/",
+        {"timer_seconds": -30},
+        HTTP_AUTHORIZATION=f"Bearer {host}",
+        format="json",
+    ).json()
+    assert data["current_phase"] == "closed"
+    assert data["phase_remaining_seconds"] is None
+
+
+@pytest.mark.django_db
+def test_all_submitted_auto_closes_options(session_setup):
+    api = APIClient()
+    host = session_setup.host_token
+    join_a = api.post(
+        "/api/sessions/join/",
+        {
+            "join_code": session_setup.join_code,
+            "student_no": "S301",
+            "display_name": "A",
+        },
+        format="json",
+    ).json()
+    join_b = api.post(
+        "/api/sessions/join/",
+        {
+            "join_code": session_setup.join_code,
+            "student_no": "S302",
+            "display_name": "B",
+        },
+        format="json",
+    ).json()
+    api.post(f"/api/sessions/{session_setup.id}/start/", HTTP_AUTHORIZATION=f"Bearer {host}")
+    api.post(
+        f"/api/sessions/{session_setup.id}/phase/",
+        {"phase": "options", "timer_seconds": 120},
+        HTTP_AUTHORIZATION=f"Bearer {host}",
+        format="json",
+    )
+
+    for join in (join_a, join_b):
+        opts = api.post(
+            "/api/participants/me/options/",
+            HTTP_AUTHORIZATION=f"Bearer {join['client_token']}",
+        ).json()
+        opt_id = opts["options"][0]["id"]
+        api.post(
+            "/api/participants/me/answers/",
+            {"option_ids": [opt_id]},
+            HTTP_AUTHORIZATION=f"Bearer {join['client_token']}",
+            format="json",
+        )
+
+    session_setup.refresh_from_db()
+    assert session_setup.current_phase == QuizSession.Phase.CLOSED
+    assert Answer.objects.filter(session=session_setup).count() == 2
+
+
+@pytest.mark.django_db
 def test_session_summary_includes_average_and_stddev(session_setup):
     api = APIClient()
     host = session_setup.host_token

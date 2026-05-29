@@ -57,6 +57,7 @@ from quiz.services.session_fsm import (  # noqa: E402
     next_question,
     open_review,
     public_base_url,
+    try_close_options_if_all_answered,
     recover_expired_timers,
     rescue_participant,
     session_state_payload,
@@ -541,6 +542,7 @@ def participant_me_submit():
         answer = submit_answer(participant=participant, question=question, selected_option_ids=option_ids)
     except ValueError as exc:
         return jsonify({"detail": str(exc)}), 400
+    try_close_options_if_all_answered(session, question)
     return jsonify({"message": "已送出", "answer": AnswerResultSerializer(answer).data}), 201
 
 

@@ -9,6 +9,7 @@ import TimerBar from "@/components/TimerBar.vue";
 import { usePhaseCountdown } from "@/composables/usePhaseCountdown";
 import { authHeaders, getHostToken } from "@/composables/useAuth";
 import { parseJsonResponse } from "@/utils/parseJsonResponse";
+import { speakNextQuestion, speakQuizEnded } from "@/utils/speak";
 
 const route = useRoute();
 const sessionId = Number(route.params.sessionId);
@@ -28,9 +29,12 @@ const rescueStudentNo = ref("");
 const projectionOpen = ref(true);
 
 const TEACHER_POLL_MS = 10_000;
+const TEACHER_ANSWERING_POLL_MS = 3_000;
 
 let pollTimer = null;
 let closedSyncTimer = null;
+const autoAdvancedQuestionIndex = ref(-1);
+const quizEndAnnounced = ref(false);
 
 const { remainingSec, syncClock, stopClock } = usePhaseCountdown(
   () => state.value,
@@ -59,6 +63,9 @@ const canAdvance = computed(
 );
 const isLastQuestion = computed(
   () => questionNumber.value === (state.value?.total_questions ?? 0),
+);
+const totalParticipants = computed(
+  () => questionStats.value?.total_participants ?? participants.value.length,
 );
 
 const joinCodeCopied = ref(false);
@@ -162,6 +169,58 @@ async function loadCurrentStats() {
   }
 }
 
+function stopTeacherPolling() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function scheduleTeacherPoll() {
+  stopTeacherPolling();
+  const delay = isAnswering.value ? TEACHER_ANSWERING_POLL_MS : TEACHER_POLL_MS;
+  pollTimer = setTimeout(async () => {
+    try {
+      await refresh();
+      if (isClosed.value || isAnswering.value) {
+        await loadCurrentStats();
+      }
+    } catch {
+      /* ignore transient poll errors */
+    }
+    scheduleTeacherPoll();
+  }, delay);
+}
+
+async function maybeAutoAdvanceQuestion() {
+  if (!isClosed.value || !canAdvance.value) return;
+
+  const qIndex = state.value?.current_question_index ?? -1;
+  if (autoAdvancedQuestionIndex.value === qIndex) return;
+
+  autoAdvancedQuestionIndex.value = qIndex;
+  stopClock();
+  stopClosedSync();
+  await loadCurrentStats().catch(() => {});
+
+  if (actionBusy.value) {
+    autoAdvancedQuestionIndex.value = -1;
+    return;
+  }
+
+  const closedNum = questionNumber.value;
+  const wasLast = isLastQuestion.value;
+  try {
+    setMessage(
+      wasLast ? `第 ${closedNum} 題已結束，測驗結束。` : `第 ${closedNum} 題已結束，自動進入下一題。`,
+    );
+    await nextQuestion();
+  } catch (e) {
+    autoAdvancedQuestionIndex.value = -1;
+    error.value = String(e.message || e);
+  }
+}
+
 function stopClosedSync() {
   if (closedSyncTimer) {
     clearInterval(closedSyncTimer);
@@ -177,11 +236,14 @@ function startClosedSync() {
       .catch(() => {});
   };
   syncClosed();
-  closedSyncTimer = setInterval(syncClosed, TEACHER_POLL_MS);
+  closedSyncTimer = setInterval(syncClosed, TEACHER_ANSWERING_POLL_MS);
 }
 
 watch(remainingSec, (sec) => {
   if (sec === 0 && isAnswering.value) {
+    refresh()
+      .then(() => loadCurrentStats())
+      .catch(() => {});
     startClosedSync();
   } else if (isClosed.value) {
     stopClosedSync();
@@ -189,15 +251,37 @@ watch(remainingSec, (sec) => {
 });
 
 watch(
+  () => [isAnswering.value, submittedCount.value, totalParticipants.value],
+  ([answering, submitted, total]) => {
+    if (answering && total > 0 && submitted >= total) {
+      refresh()
+        .then(() => loadCurrentStats())
+        .then(() => maybeAutoAdvanceQuestion())
+        .catch(() => {});
+    }
+  },
+);
+
+watch(
   () => state.value?.current_phase,
-  (phase) => {
+  (phase, prevPhase) => {
     syncClock();
     if (phase === "closed") {
       stopClosedSync();
       loadCurrentStats().catch(() => {});
+      if (prevPhase === "options") {
+        maybeAutoAdvanceQuestion();
+      }
+    }
+    if (phase === "options" || phase === "closed") {
+      scheduleTeacherPoll();
     }
   },
 );
+
+watch(isAnswering, () => {
+  scheduleTeacherPoll();
+});
 
 watch(
   () => state.value?.current_question_index,
@@ -207,6 +291,7 @@ watch(
     }
   },
 );
+
 async function startQuizFromLobby() {
   if (actionBusy.value) return;
   actionBusy.value = true;
@@ -261,8 +346,8 @@ async function adjustTimer() {
   if (actionBusy.value) return;
   error.value = "";
   const seconds = Number(timerInput.value);
-  if (!Number.isFinite(seconds) || seconds < 5) {
-    error.value = "至少增加 5 秒。";
+  if (!Number.isFinite(seconds) || seconds === 0) {
+    error.value = "請輸入非零秒數（正數加時間、負數縮短）。";
     return;
   }
   actionBusy.value = true;
@@ -280,9 +365,16 @@ async function adjustTimer() {
     if (data.phase_timer_seconds != null) {
       activeTimerTotal.value = data.phase_timer_seconds;
     }
-    setMessage(
-      `已增加 ${seconds} 秒，剩餘 ${data.phase_remaining_seconds ?? "?"} 秒。`,
-    );
+    syncClock();
+    if (data.current_phase === "closed") {
+      setMessage("時間已結束，本題作答階段已關閉。");
+      await loadCurrentStats();
+    } else {
+      const action = seconds > 0 ? `增加 ${seconds}` : `減少 ${Math.abs(seconds)}`;
+      setMessage(
+        `已${action} 秒，剩餘 ${data.phase_remaining_seconds ?? "?"} 秒。`,
+      );
+    }
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -319,16 +411,27 @@ async function nextQuestion() {
   if (actionBusy.value) return;
   actionBusy.value = true;
   error.value = "";
+  const shouldAnnounceQuizEnded =
+    isLastQuestion.value &&
+    totalParticipants.value > 0 &&
+    submittedCount.value >= totalParticipants.value;
   try {
     const data = await api("/next/", { method: "POST" });
     questionStats.value = null;
     if (data.status === "running") {
+      speakNextQuestion();
       await refresh();
+      openProjection();
       actionBusy.value = false;
       await openOptions();
     } else {
+      closeProjection();
       setMessage("測驗已結束，可查看總結。");
       await refresh();
+      if (shouldAnnounceQuizEnded && !quizEndAnnounced.value) {
+        quizEndAnnounced.value = true;
+        speakQuizEnded();
+      }
     }
   } catch (e) {
     error.value = String(e.message || e);
@@ -354,15 +457,7 @@ onMounted(async () => {
     await loadCurrentStats();
     syncClock();
     window.addEventListener("keydown", onProjectionKeydown);
-    pollTimer = setInterval(() => {
-      refresh()
-        .then(() => {
-          if (isClosed.value || isAnswering.value) {
-            loadCurrentStats().catch(() => {});
-          }
-        })
-        .catch(() => {});
-    }, TEACHER_POLL_MS);
+    scheduleTeacherPoll();
   } catch (e) {
     error.value = String(e);
   }
@@ -370,7 +465,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onProjectionKeydown);
-  if (pollTimer) clearInterval(pollTimer);
+  stopTeacherPolling();
   stopClock();
   stopClosedSync();
 });
@@ -598,13 +693,13 @@ onUnmounted(() => {
             </p>
             <div class="space-y-2">
               <label class="block text-slate-600">
-                {{ isAnswering ? "增加秒數" : "計時（秒）" }}
+                {{ isAnswering ? "調整秒數（±）" : "計時（秒）" }}
               </label>
               <div class="flex flex-col gap-1.5">
                 <input
                   v-model.number="timerInput"
                   type="number"
-                  min="5"
+                  :min="isAnswering ? -3600 : 5"
                   class="teacher-sidebar-input w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-200"
                   @keyup.enter="isAnswering ? adjustTimer() : openOptions()"
                 />
@@ -624,14 +719,14 @@ onUnmounted(() => {
                   :disabled="!isAnswering || actionBusy"
                   @click="adjustTimer"
                 >
-                  {{ actionBusy ? "…" : "+ 時間" }}
+                  {{ actionBusy ? "…" : "調整時間" }}
                 </button>
               </div>
               <p class="text-[10px] leading-snug text-slate-500">
                 {{
                   isStem
                     ? "設定本題作答秒數，再開放選項開始倒數。"
-                    : "將輸入的秒數加至目前剩餘時間，學生端下次輪詢會同步。"
+                    : "正數加時間、負數縮短；若縮至 0 秒以下則立即結束本題。"
                 }}
               </p>
             </div>
@@ -714,6 +809,12 @@ onUnmounted(() => {
               :total-sec="activeTimerTotal"
             />
             <p v-else class="text-lg text-slate-300 lg:text-xl">{{ phaseHintProjection }}</p>
+            <p
+              v-if="isAnswering || isClosed"
+              class="mt-2 text-center text-base text-indigo-200 lg:text-lg"
+            >
+              已提交 {{ submittedCount }} / {{ totalParticipants }} 人
+            </p>
           </div>
           <button
             type="button"
@@ -736,18 +837,60 @@ onUnmounted(() => {
         </main>
 
         <footer
-          v-if="isStem || isClosed"
+          v-if="isStem || isAnswering || isClosed"
           class="flex shrink-0 flex-wrap items-center justify-center gap-3 border-t border-white/10 px-6 py-4"
         >
-          <button
+          <div
             v-if="isStem"
-            type="button"
-            class="btn-primary min-w-[240px]"
-            :disabled="actionBusy"
-            @click="openOptions"
+            class="flex flex-wrap items-center justify-center gap-3"
           >
-            {{ actionBusy ? "處理中…" : "Open Options & Start Timer" }}
-          </button>
+            <label class="text-sm text-slate-300">
+              計時（秒）
+              <input
+                v-model.number="timerInput"
+                type="number"
+                min="5"
+                class="ml-2 w-24 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-base text-white focus:border-indigo-400 focus:outline-none"
+                @keyup.enter="openOptions"
+              />
+            </label>
+            <button
+              type="button"
+              class="btn-primary min-w-[240px]"
+              :disabled="actionBusy"
+              @click="openOptions"
+            >
+              {{ actionBusy ? "處理中…" : "Open Options & Start Timer" }}
+            </button>
+          </div>
+
+          <div
+            v-if="isAnswering"
+            class="flex flex-wrap items-center justify-center gap-3"
+          >
+            <label class="text-sm text-slate-300">
+              調整秒數（±）
+              <input
+                v-model.number="timerInput"
+                type="number"
+                min="-3600"
+                class="ml-2 w-24 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-base text-white focus:border-indigo-400 focus:outline-none"
+                @keyup.enter="adjustTimer"
+              />
+            </label>
+            <button
+              type="button"
+              class="rounded-lg border border-white/25 bg-white/10 px-5 py-2 text-base text-white hover:bg-white/20 disabled:opacity-50"
+              :disabled="actionBusy"
+              @click="adjustTimer"
+            >
+              {{ actionBusy ? "處理中…" : "調整時間" }}
+            </button>
+            <p class="w-full text-center text-sm text-slate-400">
+              正數加時間、負數縮短；縮至 0 秒以下立即結束本題
+            </p>
+          </div>
+
           <p v-if="isClosed" class="text-lg text-slate-300">計時已結束，請收合視窗查看統計。</p>
         </footer>
       </div>

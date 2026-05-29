@@ -92,10 +92,12 @@ export function mergeTimerFields(state, data) {
   };
 }
 
-/** 學生端輪詢間隔：取得選項後至提交前 10–15 秒；其餘 2 秒 */
-export function studentPollIntervalMs({ isAnswering, optionsRevealed, submitted }) {
-  if (isAnswering && optionsRevealed && !submitted) {
-    return 10_000 + Math.floor(Math.random() * 5_001);
-  }
+/** 學生端大廳等候輪詢間隔（偵測教師是否開始測驗） */
+export function studentLobbyPollIntervalMs() {
   return 2_000;
+}
+
+/** 學生端計時同步輪詢間隔（僅在作答中且已取得選項、尚未提交時使用） */
+export function studentPollIntervalMs() {
+  return 10_000 + Math.floor(Math.random() * 5_001);
 }
