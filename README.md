@@ -59,10 +59,11 @@ npm run dev
 
 | 角色 | 網址 |
 |------|------|
-| 教師首頁 | http://localhost:5173/teacher |
-| 題庫管理 | http://localhost:5173/teacher/banks |
-| 學生加入 | http://localhost:5173/student/quiz |
-| API 健康檢查 | http://127.0.0.1:5000/api/health/ |
+| 教師首頁 | http://134.208.64.172:5173/teacher |
+| 登入頁 | http://134.208.64.172:5173/login |
+| 題庫管理 | http://134.208.64.172:5173/teacher/banks |
+| 學生加入 | http://134.208.64.172:5173/student/quiz |
+| API 健康檢查 | http://134.208.64.172:5000/api/health/ |
 
 Vite 會將 `/api` 代理到後端 `:5000`。
 
@@ -80,7 +81,7 @@ cd backend
 python manage.py import_questions ..\questions.json --name "線性代數題庫"
 ```
 
-**網頁匯入：** 教師端 → [題庫管理](http://localhost:5173/teacher/banks) → 上傳 JSON。
+**網頁匯入：** 教師端 → [題庫管理](http://134.208.64.172:5173/teacher/banks) → 上傳 JSON。
 
 格式說明見 [docs/QUESTION_BANK_JSON.md](docs/QUESTION_BANK_JSON.md)。
 
@@ -161,10 +162,10 @@ waitress-serve --host=0.0.0.0 --port=3080 run_flask:app
 
 或使用 `scripts\start.bat`。完整步驟見 [docs/DEPLOY_LAN.md](docs/DEPLOY_LAN.md)。
 
-於專案根目錄 `.env` 設定區網 IP，供 QR Code 使用：
+於專案根目錄 `.env` 設定外部可達位址，供 QR Code 使用：
 
 ```env
-LAN_BASE_URL=http://192.168.1.50:3080
+LAN_BASE_URL=http://134.208.64.172:3080
 ```
 
 ---

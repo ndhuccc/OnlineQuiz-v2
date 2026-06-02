@@ -6,7 +6,7 @@ from quiz.models import Answer, Participant, QuizSession
 class ParticipantSerializer(serializers.ModelSerializer):
     class Meta:
         model = Participant
-        fields = ["id", "student_no", "display_name", "joined_at", "rejoin_used"]
+        fields = ["id", "student_no", "display_name", "joined_at", "rejoin_used", "start_question_index"]
 
 
 class SessionCreateSerializer(serializers.Serializer):

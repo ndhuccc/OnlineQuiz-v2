@@ -72,7 +72,7 @@ const joinCodeCopied = ref(false);
 
 const phaseHintProjection = computed(() => {
   if (isClosed.value) return "本題已結束，請在控制面板查看統計並繼續。";
-  if (isStem.value) return "題幹階段：請在下方按鈕開放選項並開始計時。";
+  if (isStem.value) return "題幹階段";
   if (isAnswering.value) return "作答進行中";
   return "";
 });
@@ -299,7 +299,7 @@ async function startQuizFromLobby() {
   try {
     await api("/start/", { method: "POST" });
     await refresh();
-    setMessage(`第 ${questionNumber.value} 題題幹已顯示（僅投影幕），學生端不會看到題幹。`);
+    setMessage(`第 ${questionNumber.value} 題已開放作答，倒數計時中。`);
   } catch (e) {
     error.value = String(e.message || e);
   } finally {
@@ -426,7 +426,7 @@ async function nextQuestion() {
       await openOptions();
     } else {
       closeProjection();
-      setMessage("測驗已結束，可查看總結。");
+      setMessage("測驗已結束，複習已自動開放。");
       await refresh();
       if (shouldAnnounceQuizEnded && !quizEndAnnounced.value) {
         quizEndAnnounced.value = true;
@@ -438,12 +438,6 @@ async function nextQuestion() {
   } finally {
     actionBusy.value = false;
   }
-}
-
-async function openReview() {
-  await api("/open-review/", { method: "POST" });
-  setMessage("Review is now open for students.");
-  await refresh();
 }
 
 onMounted(async () => {
@@ -509,7 +503,7 @@ onUnmounted(() => {
             <p class="text-sm uppercase tracking-[0.3em] text-indigo-200">Lobby</p>
             <h2 class="text-4xl font-semibold">Scan to join this quiz</h2>
             <p class="max-w-2xl text-lg text-slate-300">
-              Let students join first, then begin the quiz to show the question stem.
+              Let students join first, then begin the quiz. The first question will open automatically with a countdown timer.
             </p>
           </div>
 
@@ -591,7 +585,6 @@ onUnmounted(() => {
             </tbody>
           </table>
         </div>
-        <button v-if="isSummary" class="btn-primary" @click="openReview">Open Review</button>
       </section>
 
       <section v-if="showQuestionBoard && state" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px] xl:grid-cols-[minmax(0,1fr)_200px]">
@@ -620,12 +613,6 @@ onUnmounted(() => {
             <p v-if="!projectionOpen" class="text-sm text-slate-500">
               題幹與計時器請使用投影視窗顯示；按上方按鈕或 Esc 收合後可在此操作。
             </p>
-
-            <div v-if="isStem && !projectionOpen" class="flex justify-end">
-              <button type="button" class="btn-primary" :disabled="actionBusy" @click="openOptions">
-                {{ actionBusy ? "處理中…" : "Open Options & Start Timer" }}
-              </button>
-            </div>
           </section>
 
           <section v-if="isClosed" class="card space-y-4">
@@ -701,22 +688,13 @@ onUnmounted(() => {
                   type="number"
                   :min="isAnswering ? -3600 : 5"
                   class="teacher-sidebar-input w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-200"
-                  @keyup.enter="isAnswering ? adjustTimer() : openOptions()"
+                  @keyup.enter="isAnswering ? adjustTimer() : null"
                 />
                 <button
-                  v-if="isStem"
-                  type="button"
-                  class="teacher-sidebar-btn btn-primary w-full"
-                  :disabled="actionBusy"
-                  @click="openOptions"
-                >
-                  {{ actionBusy ? "…" : "Open Options" }}
-                </button>
-                <button
-                  v-else
+                  v-if="isAnswering"
                   type="button"
                   class="teacher-sidebar-btn btn-secondary w-full"
-                  :disabled="!isAnswering || actionBusy"
+                  :disabled="actionBusy"
                   @click="adjustTimer"
                 >
                   {{ actionBusy ? "…" : "調整時間" }}
@@ -724,15 +702,15 @@ onUnmounted(() => {
               </div>
               <p class="text-[10px] leading-snug text-slate-500">
                 {{
-                  isStem
-                    ? "設定本題作答秒數，再開放選項開始倒數。"
-                    : "正數加時間、負數縮短；若縮至 0 秒以下則立即結束本題。"
+                  isAnswering
+                    ? "正數加時間、負數縮短；若縮至 0 秒以下則立即結束本題。"
+                    : "本題作答秒數（開始測驗或下一題時自動套用）。"
                 }}
               </p>
             </div>
 
             <div class="rounded-md bg-slate-50 px-2 py-1.5 text-[10px] leading-snug text-slate-600">
-              測驗開始後無法中途加入；搶救僅限一次。
+              學生可隨時重新登入加入測驗，需輸入邀請碼。
             </div>
 
             <div v-if="isQuizRunning" class="space-y-1.5 border-t border-slate-100 pt-1.5">

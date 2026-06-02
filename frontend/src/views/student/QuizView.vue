@@ -1,17 +1,24 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import MathText from "@/components/MathText.vue";
 import StudentLayout from "@/components/StudentLayout.vue";
 import TimerBar from "@/components/TimerBar.vue";
 import { mergeTimerFields, studentLobbyPollIntervalMs, studentPollIntervalMs, usePhaseCountdown } from "@/composables/usePhaseCountdown";
-import { authHeaders, clearClientToken, getClientToken, saveClientToken } from "@/composables/useAuth";
+import { authHeaders, clearClientToken, getClientToken, saveClientToken, getLoginSession } from "@/composables/useAuth";
 import { parseJsonResponse } from "@/utils/parseJsonResponse";
 
+const router = useRouter();
 const phase = ref("join");
 const joinCode = ref("");
 const studentNo = ref("");
 const displayName = ref("");
 const state = ref(null);
+
+const isLoggedInStudent = computed(() => {
+  const session = getLoginSession();
+  return session && session.role === "student";
+});
 const questionType = ref("single");
 const options = ref([]);
 const optionsRevealed = ref(false);
@@ -65,10 +72,18 @@ const isMultiple = computed(() => questionType.value === "multiple");
 const isAnswering = computed(() => state.value?.current_phase === "options");
 const isStem = computed(() => state.value?.current_phase === "stem");
 const isClosed = computed(() => state.value?.current_phase === "closed");
+const isBeforeStart = computed(
+  () =>
+    state.value &&
+    state.value.current_question_index != null &&
+    state.value.start_question_index != null &&
+    state.value.current_question_index < state.value.start_question_index,
+);
 const showRevealButton = computed(
   () =>
     Boolean(state.value) &&
     !isReviewOpen.value &&
+    !isBeforeStart.value &&
     ((isRunning.value && !isLobbyWaiting.value) || isSummary.value),
 );
 const showAnswerPanel = computed(
@@ -87,11 +102,14 @@ const statusHint = computed(() => {
   if (state.value?.status === "lobby") {
     return "測驗尚未開始，請等待教師指示。";
   }
+  if (isBeforeStart.value) {
+    return "此題已於您加入前結束，無法作答。請等待目前開放的題目。";
+  }
   if (isReviewOpen.value) {
-    return "教師已開放複習，請按下 Open Review 查看成績與解析。";
+    return "測驗已結束，複習已自動開放。請按下 Open Review 查看成績與解析。";
   }
   if (isSummary.value) {
-    return "測驗已結束，請按下「取得答案選項」確認是否已開放複習。";
+    return "測驗已結束，複習即將自動開放。";
   }
   if (isStem.value) {
     return "請看投影幕上的題目，題幹不會顯示在此裝置。";
@@ -232,17 +250,30 @@ function leaveAndRejoin() {
   state.value = null;
   phase.value = "join";
   error.value = "";
-  studentNo.value = "";
-  displayName.value = "";
+  joinCode.value = "";
+  // Re-populate student info from login session for logged-in students
+  const session = getLoginSession();
+  if (session && session.role === "student") {
+    studentNo.value = session.identifier || "";
+    displayName.value = session.display_name || "";
+  } else {
+    studentNo.value = "";
+    displayName.value = "";
+  }
 }
 
 async function join() {
   error.value = "";
   joining.value = true;
   try {
+    const session = getLoginSession();
+    const headers = { "Content-Type": "application/json" };
+    if (session && session.token) {
+      headers["Authorization"] = `Bearer ${session.token}`;
+    }
     const res = await fetch("/api/sessions/join/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         join_code: joinCode.value.trim().toUpperCase(),
         student_no: studentNo.value.trim(),
@@ -360,7 +391,13 @@ async function revealOptions() {
       headers: authHeaders(clientToken),
     });
     const data = await parseJsonResponse(res);
-    if (!res.ok) throw new Error(data.detail || "無法取得答案選項。");
+    if (!res.ok) {
+      if (res.status === 403) {
+        message.value = data.detail || "此題已結束，無法取回選項。";
+        return;
+      }
+      throw new Error(data.detail || "無法取得答案選項。");
+    }
     const newOptions = data.options ?? [];
     const isStillSameQuestion =
       isSameOptionSet(previousOptions, newOptions) ||
@@ -426,6 +463,15 @@ async function submit() {
 }
 
 onMounted(async () => {
+  const session = getLoginSession();
+  if (session && session.role === "student") {
+    studentNo.value = session.identifier || "";
+    displayName.value = session.display_name || "";
+  } else {
+    router.replace("/login?next=" + encodeURIComponent(location.pathname + location.search));
+    return;
+  }
+
   const params = new URLSearchParams(location.search);
   const urlCode = params.get("code")?.trim().toUpperCase() || "";
   if (urlCode) joinCode.value = urlCode;
@@ -447,12 +493,9 @@ onMounted(async () => {
     return;
   }
 
+  // No join code in URL — always require student to enter the code
+  // even if they have a previous clientToken (ensures correct session)
   if (clientToken) {
-    const resumed = await tryResumeSession();
-    if (resumed) {
-      enterQuizPhase();
-      return;
-    }
     clearClientToken();
     clientToken = null;
   }
@@ -470,7 +513,9 @@ onUnmounted(() => {
   <StudentLayout :title="phase === 'join' ? '加入測驗' : '作答'">
     <main class="mx-auto max-w-lg px-4 pb-8 pt-4">
       <section v-if="phase === 'join'" class="card space-y-4">
-        <p class="text-sm text-slate-600">請輸入加入代碼、學號與姓名以加入本場測驗。</p>
+        <p class="text-sm text-slate-600">
+          {{ isLoggedInStudent ? "請輸入加入代碼，系統已自動為您填寫學號與姓名。" : "請輸入加入代碼、學號與姓名以加入本場測驗。" }}
+        </p>
         <input
           v-model="joinCode"
           placeholder="加入代碼"
@@ -480,15 +525,17 @@ onUnmounted(() => {
         <input
           v-model="studentNo"
           placeholder="學號"
-          class="input-field"
+          class="input-field disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
           inputmode="numeric"
           autocomplete="username"
+          :disabled="isLoggedInStudent"
         />
         <input
           v-model="displayName"
           placeholder="姓名"
-          class="input-field"
+          class="input-field disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
           autocomplete="name"
+          :disabled="isLoggedInStudent"
         />
         <button
           class="btn-primary w-full"
@@ -544,7 +591,7 @@ onUnmounted(() => {
         </div>
 
         <div v-if="isSummary && !isReviewOpen" class="card text-center text-sm text-slate-600">
-          測驗已全部結束，請等待教師開放複習。
+          測驗已全部結束，複習即將自動開放…
         </div>
 
         <div v-if="showRevealButton" class="card space-y-3">

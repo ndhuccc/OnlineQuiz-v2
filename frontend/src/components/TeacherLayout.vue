@@ -1,7 +1,17 @@
 <script setup>
+import { useRouter } from "vue-router";
+import { clearLoginSession } from "@/composables/useAuth";
+
 defineProps({
   title: { type: String, default: "Teacher" },
 });
+
+const router = useRouter();
+
+function logout() {
+  clearLoginSession();
+  router.push("/login");
+}
 </script>
 
 <template>
@@ -19,6 +29,9 @@ defineProps({
           <router-link to="/teacher/banks" class="text-slate-600 hover:text-indigo-600">
             Banks
           </router-link>
+          <button type="button" class="text-slate-600 hover:text-indigo-600" @click="logout">
+            Logout
+          </button>
         </nav>
       </div>
     </header>

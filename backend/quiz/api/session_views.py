@@ -277,6 +277,12 @@ def participant_me_options(request):
     if not question:
         return Response({"detail": "沒有題目"}, status=status.HTTP_400_BAD_REQUEST)
 
+    if session.current_question_index < participant.start_question_index:
+        return Response(
+            {"detail": "此題已結束，無法取回選項。請等待目前開放的題目。"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     permutation = get_or_create_shuffle(session, question, participant)
     return Response(
         {
@@ -301,6 +307,12 @@ def participant_me_submit(request):
     question = session.current_question()
     if not question:
         return Response({"detail": "沒有題目"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if session.current_question_index < participant.start_question_index:
+        return Response(
+            {"detail": "此題已結束，無法提交答案。"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     ser = SubmitAnswerSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
@@ -345,6 +357,7 @@ def _participant_state_payload(participant) -> dict:
     payload = {
         **session_state_payload(session),
         "has_answered": _participant_answered(participant, session),
+        "start_question_index": participant.start_question_index,
     }
     meta = question_meta_payload(session)
     if meta:

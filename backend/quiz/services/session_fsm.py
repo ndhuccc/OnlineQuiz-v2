@@ -300,8 +300,14 @@ def start_session(session: QuizSession) -> QuizSession:
     session.status = QuizSession.Status.RUNNING
     session.started_at = timezone.now()
     session.current_question_index = 0
-    session.current_phase = QuizSession.Phase.STEM
-    _clear_phase_timer(session)
+    # Directly open options for the first question with its timer
+    question = session.current_question()
+    if question:
+        _start_options_timer(session, question.timer_seconds)
+        session.current_phase = QuizSession.Phase.OPTIONS
+    else:
+        session.current_phase = QuizSession.Phase.STEM
+        _clear_phase_timer(session)
     session.save(
         update_fields=[
             "status",
@@ -413,7 +419,8 @@ def next_question(session: QuizSession) -> QuizSession:
 
     next_index = session.current_question_index + 1
     if next_index >= len(session.question_ids):
-        session.status = QuizSession.Status.SUMMARY
+        # Auto-open review: skip SUMMARY, go directly to REVIEW
+        session.status = QuizSession.Status.REVIEW
         session.current_phase = QuizSession.Phase.CLOSED
         _clear_phase_timer(session)
         session.save(
@@ -431,6 +438,7 @@ def next_question(session: QuizSession) -> QuizSession:
             "session:ended",
             {**session_state_payload(session), "summary": summary},
         )
+        broadcast_after_commit(session.id, "session:review_opened", session_state_payload(session))
         return session
 
     session.current_question_index = next_index
@@ -468,14 +476,14 @@ def join_session(
     if session.status != QuizSession.Status.LOBBY:
         if not existing:
             raise SessionError("測驗進行中，無法新加入。請聯絡教師。")
-        if not existing.rejoin_allowed:
-            raise SessionError("此學號已在本場次，無法重新加入。請聯絡教師開放搶救。")
+        # Allow automatic rejoin: student can rejoin at any time
         existing.display_name = name
         existing.client_token = generate_token(24)
         existing.rejoin_allowed = False
         existing.rejoin_used = True
+        existing.start_question_index = session.current_question_index
         existing.save(
-            update_fields=["display_name", "client_token", "rejoin_allowed", "rejoin_used"]
+            update_fields=["display_name", "client_token", "rejoin_allowed", "rejoin_used", "start_question_index"]
         )
         return existing
 

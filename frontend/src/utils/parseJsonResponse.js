@@ -1,5 +1,5 @@
 export const DEV_BACKEND_HINT =
-  "若用 scripts\\start.bat（:3080），請開 http://localhost:3080，或重啟 npm run dev（已代理到 :3080）。開發雙服務請執行 scripts\\restart-dev.bat（:5000 + :5173）。";
+  "若用 scripts\\start.bat（:3080），請開 http://localhost:3080；若用開發雙服務，前端 :5173 會代理到後端 :5000。";
 
 export async function parseJsonResponse(res) {
   const contentType = res.headers.get("content-type") || "";

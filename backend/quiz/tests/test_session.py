@@ -69,6 +69,7 @@ def test_join_blocked_after_quiz_starts(session_setup):
         f"/api/sessions/{session_setup.id}/start/",
         HTTP_AUTHORIZATION=f"Bearer {session_setup.host_token}",
     )
+    # New student cannot join after quiz starts
     res = api.post(
         "/api/sessions/join/",
         {
@@ -81,13 +82,14 @@ def test_join_blocked_after_quiz_starts(session_setup):
     assert res.status_code == 400
     assert "無法新加入" in res.json()["detail"]
 
+    # Existing student can auto-rejoin (no rescue needed)
     dup = api.post("/api/sessions/join/", body, format="json")
-    assert dup.status_code == 400
-    assert "搶救" in dup.json()["detail"]
+    assert dup.status_code == 201
 
 
 @pytest.mark.django_db
 def test_rescue_allows_rejoin(session_setup):
+    """Existing students can auto-rejoin without teacher rescue."""
     api = APIClient()
     host = session_setup.host_token
     body = {
@@ -98,16 +100,7 @@ def test_rescue_allows_rejoin(session_setup):
     first = api.post("/api/sessions/join/", body, format="json").json()
     api.post(f"/api/sessions/{session_setup.id}/start/", HTTP_AUTHORIZATION=f"Bearer {host}")
 
-    assert api.post("/api/sessions/join/", body, format="json").status_code == 400
-
-    rescue = api.post(
-        f"/api/sessions/{session_setup.id}/rescue/",
-        {"student_no": "S001"},
-        HTTP_AUTHORIZATION=f"Bearer {host}",
-        format="json",
-    )
-    assert rescue.status_code == 200
-
+    # Existing student can auto-rejoin (no rescue needed)
     rejoin = api.post("/api/sessions/join/", body, format="json")
     assert rejoin.status_code == 201
     assert rejoin.json()["client_token"] != first["client_token"]
@@ -116,17 +109,6 @@ def test_rescue_allows_rejoin(session_setup):
 
     participant = Participant.objects.get(session=session_setup, student_no="S001")
     assert participant.rejoin_used is True
-
-    assert api.post("/api/sessions/join/", body, format="json").status_code == 400
-
-    second_rescue = api.post(
-        f"/api/sessions/{session_setup.id}/rescue/",
-        {"student_no": "S001"},
-        HTTP_AUTHORIZATION=f"Bearer {host}",
-        format="json",
-    )
-    assert second_rescue.status_code == 400
-    assert "已使用過" in second_rescue.json()["detail"]
 
 
 @pytest.mark.django_db

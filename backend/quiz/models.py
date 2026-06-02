@@ -3,6 +3,7 @@ import string
 
 from django.db import models
 from django.utils import timezone
+from django.contrib.auth.hashers import check_password, make_password
 
 
 def generate_join_code() -> str:
@@ -31,6 +32,35 @@ class QuestionBank(models.Model):
     @property
     def question_count(self) -> int:
         return self.questions.count()
+
+
+class UserProfile(models.Model):
+    name = models.CharField(max_length=128)
+    student_no = models.CharField(max_length=64, unique=True)
+    email = models.EmailField(unique=True)
+    password_hash = models.CharField(max_length=128, blank=True, default="")
+    login_token = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["student_no"]
+
+    def __str__(self) -> str:
+        return f"{self.student_no} {self.name}"
+
+    def set_password(self, raw_password: str) -> None:
+        self.password_hash = make_password(raw_password)
+
+    def save(self, *args, **kwargs) -> None:
+        if not self.password_hash:
+            self.set_password("test1234")
+        super().save(*args, **kwargs)
+
+    def check_password(self, raw_password: str) -> bool:
+        if not self.password_hash:
+            return False
+        return check_password(raw_password, self.password_hash)
 
 
 class Question(models.Model):
@@ -155,6 +185,7 @@ class Participant(models.Model):
     client_token = models.CharField(max_length=64, unique=True)
     rejoin_allowed = models.BooleanField(default=False)
     rejoin_used = models.BooleanField(default=False)
+    start_question_index = models.IntegerField(default=0)
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

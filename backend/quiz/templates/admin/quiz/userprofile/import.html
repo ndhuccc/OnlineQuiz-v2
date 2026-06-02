@@ -1,0 +1,20 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div class="module">
+  <h1>CSV 匯入使用者</h1>
+  <p>CSV 欄位需包含姓名、學號、email。欄位名稱可使用中文或英文標題。</p>
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+    <div class="form-row">
+      {{ form.csv_file.errors }}
+      {{ form.csv_file.label_tag }}<br />
+      {{ form.csv_file }}
+    </div>
+    <div class="submit-row">
+      <input type="submit" value="開始匯入" class="default" />
+      <a class="button cancel-link" href="{% url 'admin:quiz_userprofile_changelist' %}">返回列表</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

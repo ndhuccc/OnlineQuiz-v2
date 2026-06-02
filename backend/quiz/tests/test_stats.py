@@ -32,9 +32,9 @@ def session_with_answers(db):
     )
     bank_id = import_question_bank(payload).bank_id
     session = create_session(bank_id)
-    start_session(session)
     p1 = join_session(session.join_code, "S1", "甲")
     p2 = join_session(session.join_code, "S2", "乙")
+    start_session(session)
     session.refresh_from_db()
     set_phase(session, QuizSession.Phase.OPTIONS, timer_seconds=60)
     q = session.current_question()

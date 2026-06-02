@@ -43,9 +43,10 @@ from quiz.api.session_views import (  # noqa: E402
     _participant_state_payload,
     _submitted_count,
 )
-from quiz.models import Answer, Question, QuestionBank, QuizSession  # noqa: E402
+from quiz.models import Answer, Question, QuestionBank, QuizSession, UserProfile, Option, Participant  # noqa: E402
 from quiz.services.answers import submit_answer  # noqa: E402
 from quiz.services.import_json import import_from_json_text, import_question_bank, load_import_payload  # noqa: E402
+from quiz.services.login import login_student, login_teacher  # noqa: E402
 from quiz.services.review import participant_review_payload  # noqa: E402
 from quiz.services.session_fsm import (  # noqa: E402
     SessionError,
@@ -240,6 +241,28 @@ def question_bank_list_post():
     return jsonify(data), 201
 
 
+@app.post("/api/auth/login/")
+def auth_login():
+    payload = request.get_json(silent=True) or {}
+    role = (payload.get("role") or "").strip().lower()
+    try:
+        if role == "teacher":
+            result = login_teacher(
+                username=(payload.get("username") or "").strip(),
+                password=payload.get("password") or "",
+            )
+        elif role == "student":
+            result = login_student(
+                student_no=(payload.get("student_no") or "").strip(),
+                password=payload.get("password") or "",
+            )
+        else:
+            return jsonify({"detail": "請選擇教師或學生身分"}), 400
+    except ValueError as exc:
+        return jsonify({"detail": str(exc)}), 401
+    return jsonify(result.as_dict())
+
+
 @app.get("/api/question-banks/<int:bank_id>/")
 def question_bank_detail_get(bank_id: int):
     bank = get_object_or_404(QuestionBank, pk=bank_id)
@@ -289,11 +312,20 @@ def _api_error_handler(exc):
 
 @app.post("/api/sessions/join/")
 def session_join():
+    try:
+        profile = _get_logged_in_student()
+    except AuthenticationFailed as exc:
+        return jsonify({"detail": "要加入測驗，請先以學生帳密登入本系統。"}), 401
+
     ser = SessionJoinSerializer(data=request.get_json() or {})
     err = _drf_validate(ser)
     if err:
         return err
     data = ser.validated_data
+
+    if profile.student_no != data["student_no"]:
+        return jsonify({"detail": "您目前登入的學號與您填寫的學號不符。"}), 403
+
     try:
         participant = join_session(data["join_code"], data["student_no"], data.get("display_name") or "")
     except QuizSession.DoesNotExist:
@@ -505,6 +537,8 @@ def participant_me_options():
     question = session.current_question()
     if not question:
         return jsonify({"detail": "沒有題目"}), 400
+    if session.current_question_index < participant.start_question_index:
+        return jsonify({"detail": "此題已結束，無法取回選項。請等待目前開放的題目。"}), 403
     permutation = get_or_create_shuffle(session, question, participant)
     return jsonify(
         {
@@ -531,6 +565,8 @@ def participant_me_submit():
     question = session.current_question()
     if not question:
         return jsonify({"detail": "沒有題目"}), 400
+    if session.current_question_index < participant.start_question_index:
+        return jsonify({"detail": "此題已結束，無法提交答案。"}), 403
     ser = SubmitAnswerSerializer(data=request.get_json() or {})
     err = _drf_validate(ser)
     if err:
@@ -544,6 +580,161 @@ def participant_me_submit():
         return jsonify({"detail": str(exc)}), 400
     try_close_options_if_all_answered(session, question)
     return jsonify({"message": "已送出", "answer": AnswerResultSerializer(answer).data}), 201
+
+
+def _get_logged_in_student() -> UserProfile:
+    token = _bearer_token()
+    if not token:
+        raise AuthenticationFailed("需要登入權杖")
+    profile = UserProfile.objects.filter(login_token=token).first()
+    if not profile:
+        raise AuthenticationFailed("登入權杖無效或已過期")
+    return profile
+
+
+def student_history_detail_payload(participant: Participant) -> dict:
+    session = participant.session
+    questions_data = []
+    total_score = 0.0
+    max_total = 0.0
+
+    for idx, qid in enumerate(session.question_ids):
+        question = Question.objects.filter(pk=qid).prefetch_related("options").first()
+        if not question:
+            continue
+        max_total += float(question.points)
+
+        answer = Answer.objects.filter(
+            session=session,
+            question=question,
+            participant=participant,
+        ).first()
+
+        correct_letters = sorted(
+            Option.objects.filter(question=question, is_correct=True).values_list("letter", flat=True)
+        )
+        selected_letters: list[str] = []
+        score = 0.0
+        is_full = False
+        submit_source = None
+
+        if answer:
+            score = float(answer.score)
+            is_full = answer.is_full_score
+            submit_source = answer.submit_source
+            total_score += score
+            selected_letters = sorted(
+                Option.objects.filter(
+                    pk__in=answer.selected_option_ids,
+                    question=question,
+                ).values_list("letter", flat=True)
+            )
+
+        options_display = [
+            {"letter": o.letter, "label_text": o.label_text}
+            for o in question.options.order_by("sort_order")
+        ]
+
+        questions_data.append(
+            {
+                "question_index": idx,
+                "stem_text": question.stem_text,
+                "type": question.type,
+                "category": question.category,
+                "points": str(question.points),
+                "your_answer": "".join(selected_letters) if selected_letters else None,
+                "correct_answer": "".join(correct_letters),
+                "score": score,
+                "is_full_score": is_full,
+                "submit_source": submit_source,
+                "explanation_text": question.explanation_text,
+                "options": options_display,
+            }
+        )
+
+    from django.db.models import Model
+    return {
+        "session_id": session.id,
+        "student_no": participant.student_no,
+        "display_name": participant.display_name,
+        "bank_name": session.bank.name,
+        "total_score": round(total_score, 2),
+        "max_total_score": round(max_total, 2),
+        "questions": questions_data,
+    }
+
+
+@app.get("/api/students/history/")
+def student_history_list():
+    try:
+        profile = _get_logged_in_student()
+    except AuthenticationFailed as exc:
+        return jsonify({"detail": str(exc.detail)}), 401
+
+    participants = Participant.objects.filter(
+        student_no=profile.student_no
+    ).select_related("session", "session__bank").order_by("-id")
+
+    try:
+        page = int(request.args.get("page", 1))
+        if page < 1:
+            page = 1
+    except ValueError:
+        page = 1
+
+    per_page = 5
+    total_count = participants.count()
+    import math
+    total_pages = math.ceil(total_count / per_page) if total_count > 0 else 1
+
+    start_index = (page - 1) * per_page
+    end_index = start_index + per_page
+    page_items = participants[start_index:end_index]
+
+    items_data = []
+    for p in page_items:
+        session = p.session
+        max_score = 0.0
+        for qid in session.question_snapshot:
+            q = Question.objects.filter(pk=qid).first()
+            if q:
+                max_score += float(q.points)
+
+        answers = Answer.objects.filter(session=session, participant=p)
+        actual_score = sum(float(a.score) for a in answers)
+
+        items_data.append({
+            "participant_id": p.id,
+            "session_id": session.id,
+            "join_code": session.join_code,
+            "bank_name": session.bank.name,
+            "session_status": session.status,
+            "joined_at": p.joined_at.isoformat() if p.joined_at else None,
+            "actual_score": round(actual_score, 2),
+            "max_score": round(max_score, 2),
+        })
+
+    return jsonify({
+        "items": items_data,
+        "page": page,
+        "total_pages": total_pages,
+        "total_count": total_count,
+    })
+
+
+@app.get("/api/students/history/<int:participant_id>/")
+def student_history_detail(participant_id: int):
+    try:
+        profile = _get_logged_in_student()
+    except AuthenticationFailed as exc:
+        return jsonify({"detail": str(exc.detail)}), 401
+
+    participant = get_object_or_404(Participant, pk=participant_id)
+    if participant.student_no != profile.student_no:
+        return jsonify({"detail": "Forbidden"}), 403
+
+    payload = student_history_detail_payload(participant)
+    return jsonify(payload)
 
 
 def _serve_spa(path: str):
