@@ -68,8 +68,17 @@ const totalParticipants = computed(
 const joinCodeCopied = ref(false);
 
 const phaseHintProjection = computed(() => {
-  if (isClosed.value) return "本題已結束，請在控制面板查看統計並繼續。";
-  if (isStem.value) return "題幹階段";
+  const isManual = state.value?.mode === "manual";
+  if (isClosed.value) {
+    return isManual
+      ? "本題已結束，學生已可看結果。講解完畢請按「下一題」。"
+      : "本題已結束，請在控制面板查看統計並繼續。";
+  }
+  if (isStem.value) {
+    return isManual
+      ? "題幹階段，準備好請按「開放選項」"
+      : "題幹階段";
+  }
   if (isAnswering.value) return "作答進行中";
   return "";
 });
@@ -403,6 +412,13 @@ onUnmounted(() => {
           <p class="text-2xl font-bold tracking-[0.25em] text-indigo-700">{{ state.join_code }}</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
+          <span
+            class="rounded-full px-2.5 py-1 text-xs font-semibold"
+            :class="state?.mode === 'manual' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'"
+            :title="state?.mode === 'manual' ? '評量講解模式：每題老師手動開放、講解、進下一題' : '純自動模式：全自動跑完'"
+          >
+            {{ state?.mode === 'manual' ? '評量講解模式' : '純自動模式' }}
+          </span>
           <button type="button" class="btn-secondary text-sm" @click="copyJoinCode">
             {{ joinCodeCopied ? "已複製" : "複製邀請碼" }}
           </button>
@@ -771,7 +787,11 @@ onUnmounted(() => {
             </p>
           </div>
 
-          <p v-if="isClosed" class="text-lg text-slate-300">計時已結束，請收合視窗查看統計。</p>
+          <p v-if="isClosed" class="text-lg text-slate-300">
+            {{ state?.mode === 'manual'
+              ? '本題已結束，學生可看結果。講解完畢請按「下一題」。'
+              : '計時已結束，請收合視窗查看統計。' }}
+          </p>
         </footer>
       </div>
     </Teleport>

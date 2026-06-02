@@ -19,6 +19,7 @@ const isLoggedInStudent = computed(() => {
   const session = getLoginSession();
   return session && session.role === "student";
 });
+const questionResult = ref(null);  // { correct_answer, your_answer, score, is_full_score, explanation_text, ... }
 const questionType = ref("single");
 const options = ref([]);
 const optionsRevealed = ref(false);
@@ -214,6 +215,28 @@ function resetQuestionUi() {
   selectedIds.value = [];
   submitted.value = false;
   message.value = "";
+  questionResult.value = null;
+}
+
+async function fetchQuestionResult() {
+  if (!clientToken) return;
+  try {
+    const res = await fetch("/api/participants/me/question_result/", {
+      headers: authHeaders(clientToken),
+    });
+    if (res.status === 403) {
+      // 還沒到 closed 階段，不算 error
+      questionResult.value = null;
+      return;
+    }
+    if (!res.ok) {
+      return;
+    }
+    const data = await parseJsonResponse(res);
+    questionResult.value = data.question;
+  } catch (e) {
+    // 網路問題不擋流程
+  }
 }
 
 function isSameOptionSet(previous, next) {
@@ -240,6 +263,20 @@ watch(
       resetQuestionUi();
     }
     syncClock();
+    // MANUAL 模式：closed 後自動拿本題結果顯示
+    if (currentPhase === "closed") {
+      fetchQuestionResult();
+    }
+  },
+);
+
+watch(
+  () => state.value?.current_question_index,
+  (newIdx, oldIdx) => {
+    // 換題時清掉結果
+    if (newIdx !== oldIdx) {
+      questionResult.value = null;
+    }
   },
 );
 
@@ -660,6 +697,40 @@ onUnmounted(() => {
         </div>
 
         <p v-if="submitted" class="card bg-green-50 text-green-800">{{ message }}</p>
+
+        <section v-if="questionResult" class="card space-y-3 border-2 border-indigo-200">
+          <div class="flex items-center justify-between">
+            <h3 class="text-base font-semibold text-slate-900">本題結果</h3>
+            <span
+              class="rounded-full px-3 py-1 text-sm font-bold"
+              :class="questionResult.is_full_score ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'"
+            >
+              {{ questionResult.is_full_score ? '✓ 答對' : '✗ 答錯' }} ·
+              {{ questionResult.score }} / {{ questionResult.points }} 分
+            </span>
+          </div>
+
+          <div v-if="questionResult.your_answer" class="text-sm">
+            <span class="text-slate-500">你的答案：</span>
+            <span
+              class="ml-1 font-mono font-bold"
+              :class="questionResult.is_full_score ? 'text-green-700' : 'text-red-700'"
+            >
+              {{ questionResult.your_answer }}
+            </span>
+            <span v-if="!questionResult.is_full_score" class="ml-3 text-slate-500">
+              正解：<span class="font-mono font-bold text-green-700">{{ questionResult.correct_answer }}</span>
+            </span>
+          </div>
+          <div v-else class="text-sm text-slate-500">（未作答 / 逾時自動交卷）</div>
+
+          <details v-if="questionResult.explanation_text" class="rounded-lg bg-slate-50 p-3 text-sm">
+            <summary class="cursor-pointer text-slate-700 font-medium">解析</summary>
+            <div class="mt-2 text-slate-700">
+              <MathText :content="questionResult.explanation_text" />
+            </div>
+          </details>
+        </section>
 
         <router-link
           v-if="isReviewOpen"
