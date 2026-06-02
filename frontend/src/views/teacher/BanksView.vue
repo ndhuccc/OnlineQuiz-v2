@@ -12,6 +12,7 @@ const loading = ref(false);
 const message = ref("");
 const error = ref("");
 const fileInput = ref(null);
+const startModes = ref({}); // bankId -> "auto" | "manual"
 
 const form = ref({
   name: "",
@@ -95,13 +96,14 @@ async function uploadJson() {
 }
 
 async function startSession(bankId) {
+  const mode = startModes.value[bankId] || "auto";
   loading.value = true;
   error.value = "";
   try {
     const res = await fetch("/api/sessions/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bank_id: bankId }),
+      body: JSON.stringify({ bank_id: bankId, mode }),
     });
     const data = await parseJsonResponse(res);
     if (!res.ok) throw new Error(data.detail || "Failed to create session.");
@@ -215,21 +217,45 @@ onMounted(loadBanks);
               </p>
             </div>
 
-            <div class="flex gap-2">
-              <button
-                type="button"
-                class="min-h-[44px] rounded-lg bg-indigo-600 px-3 text-white"
-                @click="startSession(bank.id)"
-              >
-                Start
-              </button>
-              <button
-                type="button"
-                class="min-h-[44px] rounded px-3 text-red-600 hover:bg-red-50"
-                @click="deleteBank(bank.id, bank.name)"
-              >
-                Delete
-              </button>
+            <div class="flex flex-col items-end gap-2">
+              <div class="flex items-center gap-3 text-sm">
+                <label class="flex cursor-pointer items-center gap-1">
+                  <input
+                    type="radio"
+                    :name="`mode-${bank.id}`"
+                    value="auto"
+                    v-model="startModes[bank.id]"
+                    class="accent-indigo-600"
+                  />
+                  <span>純自動</span>
+                </label>
+                <label class="flex cursor-pointer items-center gap-1">
+                  <input
+                    type="radio"
+                    :name="`mode-${bank.id}`"
+                    value="manual"
+                    v-model="startModes[bank.id]"
+                    class="accent-amber-600"
+                  />
+                  <span>評量講解</span>
+                </label>
+              </div>
+              <div class="flex gap-2">
+                <button
+                  type="button"
+                  class="min-h-[44px] rounded-lg bg-indigo-600 px-3 text-white"
+                  @click="startSession(bank.id)"
+                >
+                  Start
+                </button>
+                <button
+                  type="button"
+                  class="min-h-[44px] rounded px-3 text-red-600 hover:bg-red-50"
+                  @click="deleteBank(bank.id, bank.name)"
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           </li>
         </ul>

@@ -52,7 +52,10 @@ def session_create(request):
     ser = SessionCreateSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
     try:
-        session = create_session(ser.validated_data["bank_id"])
+        session = create_session(
+            ser.validated_data["bank_id"],
+            mode=ser.validated_data["mode"],
+        )
     except SessionError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -63,6 +66,7 @@ def session_create(request):
             "host_token": session.host_token,
             "join_url": join_url_for_session(session),
             "bank_id": session.bank_id,
+            "mode": session.mode,
             "total_questions": len(session.question_ids),
         },
         status=status.HTTP_201_CREATED,

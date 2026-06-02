@@ -11,6 +11,10 @@ class ParticipantSerializer(serializers.ModelSerializer):
 
 class SessionCreateSerializer(serializers.Serializer):
     bank_id = serializers.IntegerField()
+    mode = serializers.ChoiceField(
+        choices=QuizSession.Mode.choices,
+        default=QuizSession.Mode.AUTO,
+    )
 
 
 class SessionJoinSerializer(serializers.Serializer):
