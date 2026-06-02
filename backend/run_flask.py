@@ -336,12 +336,25 @@ def session_create():
     ), 201
 
 
+@app.errorhandler(404)
+def _api_not_found(exc):
+    if not request.path.startswith("/api/"):
+        raise exc
+    return jsonify({"detail": "找不到資源"}), 404
+
+
 @app.errorhandler(Exception)
 def _api_error_handler(exc):
     if not request.path.startswith("/api/"):
         raise exc
     if isinstance(exc, IntegrityError):
         return jsonify({"detail": "資料庫欄位不一致，請在 backend 執行 python manage.py migrate 後重啟服務。"}), 500
+    # Django ORM 的 .get() 找不到會拋 <Model>.DoesNotExist
+    # Django 的 get_object_or_404() 拋 django.http.Http404
+    from django.http import Http404
+
+    if isinstance(exc, Http404) or exc.__class__.__name__.endswith("DoesNotExist"):
+        return jsonify({"detail": "找不到資源"}), 404
     app.logger.exception("Unhandled API error on %s", request.path)
     return jsonify({"detail": "伺服器內部錯誤，請重啟後端後再試。"}), 500
 
