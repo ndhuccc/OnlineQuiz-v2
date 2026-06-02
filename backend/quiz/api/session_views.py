@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from quiz.models import Answer, Participant, Question, QuizSession
 from quiz.services.answers import submit_answer
 from quiz.services.broadcast import broadcast
-from quiz.services.review import participant_review_payload
+from quiz.services.review import current_question_result_payload, participant_review_payload
 from quiz.services.session_fsm import (
     SessionError,
     adjust_timer,
@@ -243,6 +243,23 @@ def participant_me_review(request):
     _touch_last_seen(participant)
     try:
         data = participant_review_payload(participant)
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+    return Response(data)
+
+
+@api_view(["GET"])
+def participant_me_question_result(request):
+    """MANUAL mode 用：學生在 CLOSED 階段看本題正解+分數+解析。
+
+    限制：
+    - 必須 current_phase == CLOSED（或整個 session status=REVIEW）
+    - STEM / OPTIONS 階段拒絕（避免洩題）
+    """
+    participant = get_participant(request)
+    _touch_last_seen(participant)
+    try:
+        data = current_question_result_payload(participant)
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
     return Response(data)

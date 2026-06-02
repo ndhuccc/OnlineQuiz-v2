@@ -347,12 +347,13 @@ def start_session(session: QuizSession) -> QuizSession:
     session.status = QuizSession.Status.RUNNING
     session.started_at = timezone.now()
     session.current_question_index = 0
-    # Directly open options for the first question with its timer
     question = session.current_question()
-    if question:
+    if question and session.mode == QuizSession.Mode.AUTO:
+        # 純自動模式：直接開第一題的 options
         _start_options_timer(session, question.timer_seconds)
         session.current_phase = QuizSession.Phase.OPTIONS
     else:
+        # 評量講解模式（或沒題）：停在 STEM，等老師按「開放選項」
         session.current_phase = QuizSession.Phase.STEM
         _clear_phase_timer(session)
     session.save(

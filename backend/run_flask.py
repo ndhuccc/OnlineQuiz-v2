@@ -46,7 +46,7 @@ from quiz.models import Answer, Question, QuestionBank, QuizSession, UserProfile
 from quiz.services.answers import submit_answer  # noqa: E402
 from quiz.services.import_json import import_from_json_text, import_question_bank, load_import_payload  # noqa: E402
 from quiz.services.login import login_student, login_teacher  # noqa: E402
-from quiz.services.review import participant_review_payload  # noqa: E402
+from quiz.services.review import current_question_result_payload, participant_review_payload  # noqa: E402
 from quiz.services.session_fsm import (  # noqa: E402
     SessionError,
     adjust_timer,
@@ -554,6 +554,22 @@ def participant_me_review():
         participant = _get_participant()
         _touch_last_seen(participant)
         data = participant_review_payload(participant)
+    except AuthenticationFailed as exc:
+        return jsonify({"detail": str(exc.detail)}), 401
+    except _TabTakenOverError as exc:
+        return jsonify({"detail": str(exc.detail), "code": "tab_taken_over"}), 409
+    except ValueError as exc:
+        return jsonify({"detail": str(exc)}), 403
+    return jsonify(data)
+
+
+@app.get("/api/participants/me/question_result/")
+def participant_me_question_result():
+    """MANUAL 模式用：學生在 CLOSED 階段看本題正解+分數+解析。"""
+    try:
+        participant = _get_participant()
+        _touch_last_seen(participant)
+        data = current_question_result_payload(participant)
     except AuthenticationFailed as exc:
         return jsonify({"detail": str(exc.detail)}), 401
     except _TabTakenOverError as exc:

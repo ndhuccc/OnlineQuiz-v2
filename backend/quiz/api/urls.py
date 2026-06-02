@@ -44,6 +44,7 @@ urlpatterns = [
     ),
     path("participants/me/", session_views.participant_me_state, name="participant-me"),
     path("participants/me/review/", session_views.participant_me_review, name="participant-review"),
+    path("participants/me/question_result/", session_views.participant_me_question_result, name="participant-question-result"),
     path("participants/me/options/", session_views.participant_me_options, name="participant-options"),
     path("participants/me/answers/", session_views.participant_me_submit, name="participant-submit"),
 ]
