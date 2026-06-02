@@ -16,6 +16,8 @@ data/*.db-*
 build/
 .cache/
 *.log
+backend/flask.log
+backend/flask.err
 
 # Environment
 .env

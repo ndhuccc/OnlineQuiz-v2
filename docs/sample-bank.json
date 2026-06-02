@@ -1,0 +1,36 @@
+{
+  "name": "練習題庫 A",
+  "description": "示範題庫",
+  "default_points": 1,
+  "default_timer_seconds": 60,
+  "questions": [
+    {
+      "node": "基本觀念",
+      "question_type": "概念",
+      "format": "Single Choice",
+      "question": "HTTP 預設埠號是？",
+      "options": [
+        "A. 80",
+        "B. 443",
+        "C. 21",
+        "D. 25"
+      ],
+      "correct_answer": "A",
+      "explanation": "HTTP 走 80，HTTPS 走 443。"
+    },
+    {
+      "node": "基本觀念",
+      "question_type": "應用",
+      "format": "Multiple Choice",
+      "question": "下列哪些是 HTTP method？",
+      "options": [
+        "A. GET",
+        "B. POST",
+        "C. FETCH",
+        "D. DELETE"
+      ],
+      "correct_answer": "ABD",
+      "explanation": "FETCH 不是標準 method（它是瀏覽器 API）。"
+    }
+  ]
+}
