@@ -148,15 +148,23 @@ def test_finalize_answers_on_manual_close(session_setup):
 
 
 @pytest.mark.django_db
-def test_duplicate_student_no(session_setup):
+def test_duplicate_student_no_in_lobby_now_succeeds_as_rejoin(session_setup):
+    """Re-join in lobby is now allowed (rescue mechanism removed 2026-06).
+    Both POSTs succeed; second one returns a fresh client_token.
+    """
     api = APIClient()
     body = {
         "join_code": session_setup.join_code,
         "student_no": "S001",
         "display_name": "小明",
     }
-    assert api.post("/api/sessions/join/", body, format="json").status_code == 201
-    assert api.post("/api/sessions/join/", body, format="json").status_code == 400
+    first = api.post("/api/sessions/join/", body, format="json")
+    assert first.status_code == 201
+    first_token = first.json()["client_token"]
+
+    second = api.post("/api/sessions/join/", body, format="json")
+    assert second.status_code == 201
+    assert second.json()["client_token"] != first_token
 
 
 @pytest.mark.django_db

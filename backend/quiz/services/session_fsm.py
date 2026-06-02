@@ -559,15 +559,17 @@ def join_session(
     name = display_name.strip() or student_no
     existing = Participant.objects.filter(session=session, student_no=student_no).first()
 
-    if session.status != QuizSession.Status.LOBBY:
-        if not existing:
-            raise SessionError("測驗進行中，無法新加入。請聯絡教師。")
-        # Allow automatic rejoin: student can rejoin at any time
-        # 同時記錄 active_tab_id，多分頁開啟時最後寫入者贏
+    if existing:
+        # 不管 lobby 還是 running：既有學號一律允許 rejoin（無需老師 rescue）
+        # - 大廳階段：學生可能關掉分頁後 client_token 掉了，重進來要能續
+        # - 測驗中：原本就支援 rejoin
         existing.display_name = name
         existing.client_token = generate_token(24)
         existing.active_tab_id = tab_id or generate_token(16)
-        existing.start_question_index = session.current_question_index
+        if session.status != QuizSession.Status.LOBBY:
+            # 測驗中：記錄開始題號，避免看到之前的題
+            existing.start_question_index = session.current_question_index
+        # 大廳階段不更新 start_question_index（保持 0）
         existing.save(
             update_fields=[
                 "display_name",
@@ -578,8 +580,9 @@ def join_session(
         )
         return existing
 
-    if existing:
-        raise SessionError("此學號已加入本場次")
+    if session.status != QuizSession.Status.LOBBY:
+        # 測驗中、且這個學號是新的 → 拒絕
+        raise SessionError("測驗進行中，無法新加入。請聯絡教師。")
 
     participant = Participant.objects.create(
         session=session,
