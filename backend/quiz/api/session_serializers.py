@@ -6,7 +6,7 @@ from quiz.models import Answer, Participant, QuizSession
 class ParticipantSerializer(serializers.ModelSerializer):
     class Meta:
         model = Participant
-        fields = ["id", "student_no", "display_name", "joined_at", "rejoin_used", "start_question_index"]
+        fields = ["id", "student_no", "display_name", "joined_at", "start_question_index"]
 
 
 class SessionCreateSerializer(serializers.Serializer):
@@ -17,6 +17,7 @@ class SessionJoinSerializer(serializers.Serializer):
     join_code = serializers.CharField(max_length=6)
     student_no = serializers.CharField(max_length=64)
     display_name = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
+    tab_id = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
 
 
 class PhaseSerializer(serializers.Serializer):
@@ -31,10 +32,6 @@ class TimerAdjustSerializer(serializers.Serializer):
         if value == 0:
             raise serializers.ValidationError("秒數不可為 0")
         return value
-
-
-class RescueStudentSerializer(serializers.Serializer):
-    student_no = serializers.CharField(max_length=64)
 
 
 class SubmitAnswerSerializer(serializers.Serializer):

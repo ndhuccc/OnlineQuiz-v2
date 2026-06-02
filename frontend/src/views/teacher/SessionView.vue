@@ -25,15 +25,12 @@ const actionBusy = ref(false);
 const timerInput = ref(90);
 const activeTimerTotal = ref(90);
 const lastQuestionId = ref(null);
-const rescueStudentNo = ref("");
 const projectionOpen = ref(true);
 
 const TEACHER_POLL_MS = 10_000;
 const TEACHER_ANSWERING_POLL_MS = 3_000;
 
 let pollTimer = null;
-let closedSyncTimer = null;
-const autoAdvancedQuestionIndex = ref(-1);
 const quizEndAnnounced = ref(false);
 
 const { remainingSec, syncClock, stopClock } = usePhaseCountdown(
@@ -192,86 +189,20 @@ function scheduleTeacherPoll() {
   }, delay);
 }
 
-async function maybeAutoAdvanceQuestion() {
-  if (!isClosed.value || !canAdvance.value) return;
-
-  const qIndex = state.value?.current_question_index ?? -1;
-  if (autoAdvancedQuestionIndex.value === qIndex) return;
-
-  autoAdvancedQuestionIndex.value = qIndex;
-  stopClock();
-  stopClosedSync();
-  await loadCurrentStats().catch(() => {});
-
-  if (actionBusy.value) {
-    autoAdvancedQuestionIndex.value = -1;
-    return;
-  }
-
-  const closedNum = questionNumber.value;
-  const wasLast = isLastQuestion.value;
-  try {
-    setMessage(
-      wasLast ? `第 ${closedNum} 題已結束，測驗結束。` : `第 ${closedNum} 題已結束，自動進入下一題。`,
-    );
-    await nextQuestion();
-  } catch (e) {
-    autoAdvancedQuestionIndex.value = -1;
-    error.value = String(e.message || e);
-  }
-}
-
-function stopClosedSync() {
-  if (closedSyncTimer) {
-    clearInterval(closedSyncTimer);
-    closedSyncTimer = null;
-  }
-}
-
-function startClosedSync() {
-  if (closedSyncTimer) return;
-  const syncClosed = () => {
-    refresh()
-      .then(() => loadCurrentStats())
-      .catch(() => {});
-  };
-  syncClosed();
-  closedSyncTimer = setInterval(syncClosed, TEACHER_ANSWERING_POLL_MS);
-}
-
 watch(remainingSec, (sec) => {
   if (sec === 0 && isAnswering.value) {
     refresh()
       .then(() => loadCurrentStats())
       .catch(() => {});
-    startClosedSync();
-  } else if (isClosed.value) {
-    stopClosedSync();
   }
 });
 
 watch(
-  () => [isAnswering.value, submittedCount.value, totalParticipants.value],
-  ([answering, submitted, total]) => {
-    if (answering && total > 0 && submitted >= total) {
-      refresh()
-        .then(() => loadCurrentStats())
-        .then(() => maybeAutoAdvanceQuestion())
-        .catch(() => {});
-    }
-  },
-);
-
-watch(
   () => state.value?.current_phase,
-  (phase, prevPhase) => {
+  (phase) => {
     syncClock();
     if (phase === "closed") {
-      stopClosedSync();
       loadCurrentStats().catch(() => {});
-      if (prevPhase === "options") {
-        maybeAutoAdvanceQuestion();
-      }
     }
     if (phase === "options" || phase === "closed") {
       scheduleTeacherPoll();
@@ -411,10 +342,8 @@ async function nextQuestion() {
   if (actionBusy.value) return;
   actionBusy.value = true;
   error.value = "";
-  const shouldAnnounceQuizEnded =
-    isLastQuestion.value &&
-    totalParticipants.value > 0 &&
-    submittedCount.value >= totalParticipants.value;
+  // Server now auto-opens the next question's options in AUTO mode, so
+  // /next/ alone is enough — no need to call /phase/ here.
   try {
     const data = await api("/next/", { method: "POST" });
     questionStats.value = null;
@@ -422,13 +351,11 @@ async function nextQuestion() {
       speakNextQuestion();
       await refresh();
       openProjection();
-      actionBusy.value = false;
-      await openOptions();
     } else {
       closeProjection();
       setMessage("測驗已結束，複習已自動開放。");
       await refresh();
-      if (shouldAnnounceQuizEnded && !quizEndAnnounced.value) {
+      if (!quizEndAnnounced.value) {
         quizEndAnnounced.value = true;
         speakQuizEnded();
       }
@@ -461,7 +388,6 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onProjectionKeydown);
   stopTeacherPolling();
   stopClock();
-  stopClosedSync();
 });
 </script>
 
@@ -712,27 +638,6 @@ onUnmounted(() => {
             <div class="rounded-md bg-slate-50 px-2 py-1.5 text-[10px] leading-snug text-slate-600">
               學生可隨時重新登入加入測驗，需輸入邀請碼。
             </div>
-
-            <div v-if="isQuizRunning" class="space-y-1.5 border-t border-slate-100 pt-1.5">
-              <label class="block text-slate-600">搶救學號</label>
-              <div class="flex flex-col gap-1.5">
-                <input
-                  v-model="rescueStudentNo"
-                  placeholder="學號"
-                  class="teacher-sidebar-input w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-200"
-                  autocomplete="off"
-                  @keyup.enter="rescueStudent()"
-                />
-                <button
-                  type="button"
-                  class="teacher-sidebar-btn btn-secondary w-full"
-                  :disabled="actionBusy || !rescueStudentNo.trim()"
-                  @click="rescueStudent"
-                >
-                  開放加入
-                </button>
-              </div>
-            </div>
           </section>
 
           <section class="rounded-lg border border-slate-200/80 bg-white p-2 shadow-sm space-y-1.5">
@@ -751,9 +656,6 @@ onUnmounted(() => {
               >
                 <p class="truncate font-medium text-slate-900">{{ participant.display_name }}</p>
                 <p class="truncate text-slate-500">{{ participant.student_no }}</p>
-                <p v-if="participant.rejoin_used" class="mt-0.5 text-[9px] text-amber-600">
-                  已搶救
-                </p>
               </div>
             </div>
           </section>

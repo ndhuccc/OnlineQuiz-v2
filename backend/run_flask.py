@@ -25,7 +25,7 @@ from django.db.utils import IntegrityError  # noqa: E402
 from django.shortcuts import get_object_or_404  # noqa: E402
 from flask import Flask, g, jsonify, request, send_from_directory  # noqa: E402
 from pydantic import ValidationError as PydanticValidationError  # noqa: E402
-from rest_framework.exceptions import AuthenticationFailed, PermissionDenied  # noqa: E402
+from rest_framework.exceptions import APIException, AuthenticationFailed, PermissionDenied  # noqa: E402
 
 from quiz.api.serializers import QuestionBankDetailSerializer, QuestionBankListSerializer  # noqa: E402
 from quiz.api.session_serializers import (  # noqa: E402
@@ -36,7 +36,6 @@ from quiz.api.session_serializers import (  # noqa: E402
     SessionJoinSerializer,
     SubmitAnswerSerializer,
     TimerAdjustSerializer,
-    RescueStudentSerializer,
 )
 from quiz.api.session_views import (  # noqa: E402
     _participant_answered,
@@ -60,7 +59,6 @@ from quiz.services.session_fsm import (  # noqa: E402
     public_base_url,
     try_close_options_if_all_answered,
     recover_expired_timers,
-    rescue_participant,
     session_state_payload,
     set_phase,
     start_session,
@@ -119,10 +117,48 @@ def _get_participant():
     token = _bearer_token()
     if not token:
         raise AuthenticationFailed("需要 client_token")
+
+    request_tab = request.headers.get("X-Tab-Id", "").strip() or None
+    request_pid_raw = request.headers.get("X-Participant-Id", "").strip()
+    request_pid = int(request_pid_raw) if request_pid_raw.isdigit() else None
+
+    # 1. Try lookup by token
+    participant = None
     try:
-        return Participant.objects.select_related("session").get(client_token=token)
-    except Participant.DoesNotExist as exc:
-        raise AuthenticationFailed("無效的 client_token") from exc
+        participant = Participant.objects.select_related("session").get(client_token=token)
+    except Participant.DoesNotExist:
+        participant = None
+
+    # 2. Fallback to participant_id when token is stale (rejoin overwrote it)
+    if participant is None and request_pid is not None:
+        try:
+            participant = Participant.objects.select_related("session").get(pk=request_pid)
+        except Participant.DoesNotExist:
+            participant = None
+
+    if participant is None:
+        raise AuthenticationFailed("無效的 client_token")
+
+    # 3. Validate tab_id
+    if request_tab and participant.active_tab_id and request_tab != participant.active_tab_id:
+        raise _TabTakenOverError()
+
+    return participant
+
+
+class _TabTakenOverError(APIException):
+    status_code = 409
+    default_detail = "另一個分頁已接管此測驗，請重新加入。"
+    default_code = "tab_taken_over"
+
+
+def _touch_last_seen(participant):
+    """每次成功的 participant API 都更新 last_seen_at。"""
+    from django.utils import timezone
+
+    from quiz.models import Participant as ParticipantModel
+
+    ParticipantModel.objects.filter(pk=participant.pk).update(last_seen_at=timezone.now())
 
 
 def _json_error(exc, status: int = 400):
@@ -327,7 +363,12 @@ def session_join():
         return jsonify({"detail": "您目前登入的學號與您填寫的學號不符。"}), 403
 
     try:
-        participant = join_session(data["join_code"], data["student_no"], data.get("display_name") or "")
+        participant = join_session(
+            data["join_code"],
+            data["student_no"],
+            data.get("display_name") or "",
+            tab_id=data.get("tab_id") or "",
+        )
     except QuizSession.DoesNotExist:
         return jsonify({"detail": "找不到場次"}), 404
     except SessionError as exc:
@@ -424,27 +465,6 @@ def session_timer(session_id: int):
     return jsonify({**session_state_payload(session), "stem": stem_payload(session)})
 
 
-@app.post("/api/sessions/<int:session_id>/rescue/")
-def session_rescue(session_id: int):
-    try:
-        session = _get_session_for_host(session_id)
-        ser = RescueStudentSerializer(data=request.get_json() or {})
-        err = _drf_validate(ser)
-        if err:
-            return err
-        participant = rescue_participant(session, ser.validated_data["student_no"])
-    except (AuthenticationFailed, PermissionDenied) as exc:
-        return jsonify({"detail": str(exc.detail)}), 403
-    except SessionError as exc:
-        return _json_error(exc)
-    return jsonify(
-        {
-            "message": f"已開放 {participant.student_no} 重新加入",
-            "participant": ParticipantSerializer(participant).data,
-        }
-    )
-
-
 @app.post("/api/sessions/<int:session_id>/next/")
 def session_next(session_id: int):
     try:
@@ -507,8 +527,11 @@ def session_open_review(session_id: int):
 def participant_me_state():
     try:
         participant = _get_participant()
+        _touch_last_seen(participant)
     except AuthenticationFailed as exc:
         return jsonify({"detail": str(exc.detail)}), 401
+    except _TabTakenOverError as exc:
+        return jsonify({"detail": str(exc.detail), "code": "tab_taken_over"}), 409
     return jsonify(_participant_state_payload(participant))
 
 
@@ -516,9 +539,12 @@ def participant_me_state():
 def participant_me_review():
     try:
         participant = _get_participant()
+        _touch_last_seen(participant)
         data = participant_review_payload(participant)
     except AuthenticationFailed as exc:
         return jsonify({"detail": str(exc.detail)}), 401
+    except _TabTakenOverError as exc:
+        return jsonify({"detail": str(exc.detail), "code": "tab_taken_over"}), 409
     except ValueError as exc:
         return jsonify({"detail": str(exc)}), 403
     return jsonify(data)
@@ -528,8 +554,11 @@ def participant_me_review():
 def participant_me_options():
     try:
         participant = _get_participant()
+        _touch_last_seen(participant)
     except AuthenticationFailed as exc:
         return jsonify({"detail": str(exc.detail)}), 401
+    except _TabTakenOverError as exc:
+        return jsonify({"detail": str(exc.detail), "code": "tab_taken_over"}), 409
     session = participant.session
     session.refresh_from_db()
     if session.current_phase != QuizSession.Phase.OPTIONS:
@@ -556,8 +585,11 @@ def participant_me_options():
 def participant_me_submit():
     try:
         participant = _get_participant()
+        _touch_last_seen(participant)
     except AuthenticationFailed as exc:
         return jsonify({"detail": str(exc.detail)}), 401
+    except _TabTakenOverError as exc:
+        return jsonify({"detail": str(exc.detail), "code": "tab_taken_over"}), 409
     session = participant.session
     session.refresh_from_db()
     if session.current_phase != QuizSession.Phase.OPTIONS:

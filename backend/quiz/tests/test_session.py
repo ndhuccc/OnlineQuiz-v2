@@ -82,56 +82,32 @@ def test_join_blocked_after_quiz_starts(session_setup):
     assert res.status_code == 400
     assert "無法新加入" in res.json()["detail"]
 
-    # Existing student can auto-rejoin (no rescue needed)
+    # Existing student can rejoin (no rescue needed; rescue mechanism removed)
     dup = api.post("/api/sessions/join/", body, format="json")
     assert dup.status_code == 201
 
 
 @pytest.mark.django_db
-def test_rescue_allows_rejoin(session_setup):
-    """Existing students can auto-rejoin without teacher rescue."""
+def test_rejoin_unlimited(session_setup):
+    """Students can rejoin unlimited times (rescue mechanism removed in 2026-06)."""
     api = APIClient()
-    host = session_setup.host_token
     body = {
         "join_code": session_setup.join_code,
         "student_no": "S001",
         "display_name": "小明",
     }
     first = api.post("/api/sessions/join/", body, format="json").json()
-    api.post(f"/api/sessions/{session_setup.id}/start/", HTTP_AUTHORIZATION=f"Bearer {host}")
+    api.post(f"/api/sessions/{session_setup.id}/start/", HTTP_AUTHORIZATION=f"Bearer {session_setup.host_token}")
 
-    # Existing student can auto-rejoin (no rescue needed)
-    rejoin = api.post("/api/sessions/join/", body, format="json")
-    assert rejoin.status_code == 201
-    assert rejoin.json()["client_token"] != first["client_token"]
+    # Rejoin once
+    rejoin1 = api.post("/api/sessions/join/", body, format="json")
+    assert rejoin1.status_code == 201
+    assert rejoin1.json()["client_token"] != first["client_token"]
 
-    from quiz.models import Participant
-
-    participant = Participant.objects.get(session=session_setup, student_no="S001")
-    assert participant.rejoin_used is True
-
-
-@pytest.mark.django_db
-def test_rescue_only_during_running(session_setup):
-    api = APIClient()
-    host = session_setup.host_token
-    api.post(
-        "/api/sessions/join/",
-        {
-            "join_code": session_setup.join_code,
-            "student_no": "S001",
-            "display_name": "小明",
-        },
-        format="json",
-    )
-    res = api.post(
-        f"/api/sessions/{session_setup.id}/rescue/",
-        {"student_no": "S001"},
-        HTTP_AUTHORIZATION=f"Bearer {host}",
-        format="json",
-    )
-    assert res.status_code == 400
-    assert "進行中" in res.json()["detail"]
+    # Rejoin again — still works (no rejoin_used limit)
+    rejoin2 = api.post("/api/sessions/join/", body, format="json")
+    assert rejoin2.status_code == 201
+    assert rejoin2.json()["client_token"] != rejoin1.json()["client_token"]
 
 
 @pytest.mark.django_db

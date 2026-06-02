@@ -1,6 +1,7 @@
 """Quiz session state machine and broadcasts."""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import timedelta
@@ -12,7 +13,14 @@ from quiz.models import Answer, Participant, Question, QuestionBank, QuizSession
 from quiz.services.answers import finalize_question_answers
 from quiz.services.broadcast import broadcast_after_commit
 from quiz.services.stats import question_stats_payload, session_summary_payload
-from quiz.services.timer import session_mutex, timer_service
+from quiz.services.timer import advance_scheduler, session_mutex, timer_service
+
+
+logger = logging.getLogger(__name__)
+
+
+# 純自動模式下 closed → 進下一題前的 grace 秒數，給前端顯示統計用
+AUTO_ADVANCE_GRACE_SECONDS = 3.0
 
 
 class SessionError(Exception):
@@ -40,11 +48,14 @@ def _unique_join_code() -> str:
 
 
 @transaction.atomic
-def create_session(bank_id: int) -> QuizSession:
+def create_session(bank_id: int, mode: str = QuizSession.Mode.AUTO) -> QuizSession:
     bank = QuestionBank.objects.get(pk=bank_id)
     question_ids = list(bank.questions.order_by("order_index").values_list("id", flat=True))
     if not question_ids:
         raise SessionError("題庫沒有題目")
+
+    if mode not in QuizSession.Mode.values:
+        raise SessionError(f"不支援的模式：{mode}")
 
     session = QuizSession.objects.create(
         bank=bank,
@@ -54,6 +65,7 @@ def create_session(bank_id: int) -> QuizSession:
         status=QuizSession.Status.LOBBY,
         current_question_index=0,
         current_phase=QuizSession.Phase.STEM,
+        mode=mode,
     )
     return session
 
@@ -116,6 +128,7 @@ def session_state_payload(session: QuizSession) -> dict:
         "join_code": session.join_code,
         "join_url": join_url_for_session(session),
         "status": session.status,
+        "mode": session.mode,
         "current_question_index": session.current_question_index,
         "current_phase": session.current_phase,
         "phase_started_at": session.phase_started_at.isoformat() if session.phase_started_at else None,
@@ -223,8 +236,39 @@ def _schedule_timeout_after_request(session_id: int, question_index: int, ends_a
     threading.Thread(target=work, daemon=True, name="quiz-schedule-timeout").start()
 
 
+def _schedule_auto_advance(session_id: int) -> None:
+    """純自動模式：closed 後排程 grace 秒呼叫 _auto_advance_callback。"""
+    sid = session_id
+
+    def _auto_advance_callback() -> None:
+        from django.db import close_old_connections as _close
+
+        _close()
+        with session_mutex(sid):
+            with transaction.atomic():
+                session = QuizSession.objects.select_for_update().filter(pk=sid).first()
+                if not session or session.mode != QuizSession.Mode.AUTO:
+                    return
+                if session.status != QuizSession.Status.RUNNING:
+                    return
+                if session.current_phase != QuizSession.Phase.CLOSED:
+                    return
+                try:
+                    next_question(session)
+                except SessionError as exc:
+                    logger.warning("Auto-advance failed for session %s: %s", sid, exc)
+
+    import logging as _logging
+
+    advance_scheduler.schedule(sid, AUTO_ADVANCE_GRACE_SECONDS, _auto_advance_callback)
+
+
 def _close_options_phase(session: QuizSession, question: Question) -> None:
-    """結束本題 options 階段（逾時、全員提交或手動縮時至 0）。"""
+    """結束本題 options 階段（逾時、全員提交或手動縮時至 0）。
+
+    純自動模式下會排程 grace 秒後呼叫 next_question()。
+    評量講解模式（future）只關閉 phase，等老師手動按 /next/。
+    """
     finalize_question_answers(session, question)
     session.current_phase = QuizSession.Phase.CLOSED
     _clear_phase_timer(session)
@@ -234,6 +278,9 @@ def _close_options_phase(session: QuizSession, question: Question) -> None:
     timer_service.cancel(session.id, session.current_question_index)
     push_question_stats(session)
     _emit_phase_deferred(session)
+
+    if session.mode == QuizSession.Mode.AUTO:
+        _schedule_auto_advance(session.id)
 
 
 def try_close_options_if_all_answered(session: QuizSession, question: Question) -> bool:
@@ -372,6 +419,10 @@ def _set_phase_locked(
             update_fields=["current_phase", "phase_started_at", "phase_timer_seconds", "phase_ends_at"]
         )
         push_question_stats(session)
+        # 純自動模式：set_phase(CLOSED) 也排程 auto-advance，
+        # 確保任何路徑（API、timeout、all-submit）的 close 都會觸發
+        if session.mode == QuizSession.Mode.AUTO:
+            _schedule_auto_advance(session.id)
     elif phase == QuizSession.Phase.STEM:
         session.current_phase = QuizSession.Phase.STEM
         _clear_phase_timer(session)
@@ -416,6 +467,8 @@ def next_question(session: QuizSession) -> QuizSession:
         raise SessionError("測驗尚未開始")
 
     _cancel_timer(session)
+    # 取消任何 pending 的 auto-advance（避免 grace 時間內重複觸發）
+    advance_scheduler.cancel(session.id)
 
     next_index = session.current_question_index + 1
     if next_index >= len(session.question_ids):
@@ -442,18 +495,50 @@ def next_question(session: QuizSession) -> QuizSession:
         return session
 
     session.current_question_index = next_index
-    session.current_phase = QuizSession.Phase.STEM
-    _clear_phase_timer(session)
-    session.save(
-        update_fields=[
-            "current_question_index",
-            "current_phase",
-            "phase_started_at",
-            "phase_timer_seconds",
-            "phase_ends_at",
-        ]
-    )
-    _emit_phase(session)
+
+    # 純自動模式：直接開下一題的 options（複製 start_session 的行為）
+    if session.mode == QuizSession.Mode.AUTO:
+        next_q = session.current_question()
+        if next_q:
+            _start_options_timer(session, next_q.timer_seconds)
+            session.current_phase = QuizSession.Phase.OPTIONS
+            session.save(
+                update_fields=[
+                    "current_question_index",
+                    "current_phase",
+                    "phase_started_at",
+                    "phase_timer_seconds",
+                    "phase_ends_at",
+                ]
+            )
+            _emit_phase(session)
+        else:
+            session.current_phase = QuizSession.Phase.STEM
+            _clear_phase_timer(session)
+            session.save(
+                update_fields=[
+                    "current_question_index",
+                    "current_phase",
+                    "phase_started_at",
+                    "phase_timer_seconds",
+                    "phase_ends_at",
+                ]
+            )
+            _emit_phase(session)
+    else:
+        # 評量講解模式：保持 STEM 階段，等老師手動按「開放選項」
+        session.current_phase = QuizSession.Phase.STEM
+        _clear_phase_timer(session)
+        session.save(
+            update_fields=[
+                "current_question_index",
+                "current_phase",
+                "phase_started_at",
+                "phase_timer_seconds",
+                "phase_ends_at",
+            ]
+        )
+        _emit_phase(session)
     return session
 
 
@@ -462,6 +547,7 @@ def join_session(
     join_code: str,
     student_no: str,
     display_name: str,
+    tab_id: str = "",
 ) -> Participant:
     session = QuizSession.objects.get(join_code=join_code.upper())
     if session.status == QuizSession.Status.CLOSED:
@@ -477,13 +563,18 @@ def join_session(
         if not existing:
             raise SessionError("測驗進行中，無法新加入。請聯絡教師。")
         # Allow automatic rejoin: student can rejoin at any time
+        # 同時記錄 active_tab_id，多分頁開啟時最後寫入者贏
         existing.display_name = name
         existing.client_token = generate_token(24)
-        existing.rejoin_allowed = False
-        existing.rejoin_used = True
+        existing.active_tab_id = tab_id or generate_token(16)
         existing.start_question_index = session.current_question_index
         existing.save(
-            update_fields=["display_name", "client_token", "rejoin_allowed", "rejoin_used", "start_question_index"]
+            update_fields=[
+                "display_name",
+                "client_token",
+                "active_tab_id",
+                "start_question_index",
+            ]
         )
         return existing
 
@@ -495,8 +586,7 @@ def join_session(
         student_no=student_no,
         display_name=name,
         client_token=generate_token(24),
-        rejoin_allowed=False,
-        rejoin_used=False,
+        active_tab_id=tab_id or generate_token(16),
     )
 
     broadcast_after_commit(
@@ -508,24 +598,6 @@ def join_session(
             "participant_count": session.participants.count(),
         },
     )
-    return participant
-
-
-@transaction.atomic
-def rescue_participant(session: QuizSession, student_no: str) -> Participant:
-    if session.status != QuizSession.Status.RUNNING:
-        raise SessionError("僅測驗進行中可搶救學生")
-    student_no = student_no.strip()
-    if not student_no:
-        raise SessionError("請輸入學號")
-    try:
-        participant = Participant.objects.get(session=session, student_no=student_no)
-    except Participant.DoesNotExist as exc:
-        raise SessionError("找不到此學號的參與者（須於測驗開始前加入）") from exc
-    if participant.rejoin_used:
-        raise SessionError("此學生已使用過搶救重新加入，無法再次開放")
-    participant.rejoin_allowed = True
-    participant.save(update_fields=["rejoin_allowed"])
     return participant
 
 

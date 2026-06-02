@@ -132,6 +132,10 @@ class QuizSession(models.Model):
         OPTIONS = "options", "選項作答"
         CLOSED = "closed", "本題結束"
 
+    class Mode(models.TextChoices):
+        AUTO = "auto", "純自動模式"
+        MANUAL = "manual", "評量講解模式"
+
     bank = models.ForeignKey(
         QuestionBank,
         on_delete=models.PROTECT,
@@ -139,6 +143,11 @@ class QuizSession(models.Model):
     )
     join_code = models.CharField(max_length=6, unique=True, db_index=True)
     host_token = models.CharField(max_length=64, unique=True)
+    mode = models.CharField(
+        max_length=16,
+        choices=Mode.choices,
+        default=Mode.AUTO,
+    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
@@ -183,8 +192,8 @@ class Participant(models.Model):
     student_no = models.CharField(max_length=64)
     display_name = models.CharField(max_length=128)
     client_token = models.CharField(max_length=64, unique=True)
-    rejoin_allowed = models.BooleanField(default=False)
-    rejoin_used = models.BooleanField(default=False)
+    active_tab_id = models.CharField(max_length=64, blank=True, default="")
+    last_seen_at = models.DateTimeField(null=True, blank=True, db_index=True)
     start_question_index = models.IntegerField(default=0)
     joined_at = models.DateTimeField(auto_now_add=True)
 

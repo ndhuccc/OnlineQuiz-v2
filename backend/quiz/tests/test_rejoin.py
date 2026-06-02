@@ -82,7 +82,7 @@ def test_rejoin_without_teacher_rescue(three_question_bank):
     # Rejoin should succeed even without rescue_participant
     p1_rejoined = join_session(session.join_code, "S1", "甲")
     assert p1_rejoined.client_token != ""
-    assert p1_rejoined.rejoin_used is True
+    assert p1_rejoined.client_token != p1.client_token
 
 
 @pytest.mark.django_db

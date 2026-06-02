@@ -21,7 +21,6 @@ urlpatterns = [
     path("sessions/<int:session_id>/start/", session_views.session_start, name="session-start"),
     path("sessions/<int:session_id>/phase/", session_views.session_phase, name="session-phase"),
     path("sessions/<int:session_id>/timer/", session_views.session_timer, name="session-timer"),
-    path("sessions/<int:session_id>/rescue/", session_views.session_rescue, name="session-rescue"),
     path("sessions/<int:session_id>/next/", session_views.session_next, name="session-next"),
     path(
         "sessions/<int:session_id>/stats/current/",

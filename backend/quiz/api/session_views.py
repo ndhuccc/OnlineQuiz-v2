@@ -1,10 +1,11 @@
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from quiz.models import Answer, Question, QuizSession
+from quiz.models import Answer, Participant, Question, QuizSession
 from quiz.services.answers import submit_answer
 from quiz.services.broadcast import broadcast
 from quiz.services.review import participant_review_payload
@@ -19,7 +20,6 @@ from quiz.services.session_fsm import (
     open_review,
     public_base_url,
     question_meta_payload,
-    rescue_participant,
     session_state_payload,
     set_phase,
     start_session,
@@ -39,8 +39,12 @@ from .session_serializers import (
     SessionJoinSerializer,
     SubmitAnswerSerializer,
     TimerAdjustSerializer,
-    RescueStudentSerializer,
 )
+
+
+def _touch_last_seen(participant: Participant) -> None:
+    """每次成功的 participant API 都更新 last_seen_at，便於日後偵測幽靈分頁。"""
+    Participant.objects.filter(pk=participant.pk).update(last_seen_at=timezone.now())
 
 
 @api_view(["POST"])
@@ -75,6 +79,7 @@ def session_join(request):
             data["join_code"],
             data["student_no"],
             data.get("display_name") or "",
+            tab_id=data.get("tab_id") or "",
         )
     except QuizSession.DoesNotExist:
         return Response({"detail": "找不到場次"}, status=status.HTTP_404_NOT_FOUND)
@@ -188,23 +193,6 @@ def session_timer(request, session_id: int):
 
 
 @api_view(["POST"])
-def session_rescue(request, session_id: int):
-    session = get_session_for_host(request, session_id)
-    ser = RescueStudentSerializer(data=request.data)
-    ser.is_valid(raise_exception=True)
-    try:
-        participant = rescue_participant(session, ser.validated_data["student_no"])
-    except SessionError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-    return Response(
-        {
-            "message": f"已開放 {participant.student_no} 重新加入",
-            "participant": ParticipantSerializer(participant).data,
-        }
-    )
-
-
-@api_view(["POST"])
 def session_next(request, session_id: int):
     session = get_session_for_host(request, session_id)
     try:
@@ -252,6 +240,7 @@ def session_open_review(request, session_id: int):
 @api_view(["GET"])
 def participant_me_review(request):
     participant = get_participant(request)
+    _touch_last_seen(participant)
     try:
         data = participant_review_payload(participant)
     except ValueError as exc:
@@ -262,12 +251,14 @@ def participant_me_review(request):
 @api_view(["GET"])
 def participant_me_state(request):
     participant = get_participant(request)
+    _touch_last_seen(participant)
     return Response(_participant_state_payload(participant))
 
 
 @api_view(["POST"])
 def participant_me_options(request):
     participant = get_participant(request)
+    _touch_last_seen(participant)
     session = participant.session
     session.refresh_from_db()
     if session.current_phase != QuizSession.Phase.OPTIONS:
@@ -299,6 +290,7 @@ def participant_me_options(request):
 @api_view(["POST"])
 def participant_me_submit(request):
     participant = get_participant(request)
+    _touch_last_seen(participant)
     session = participant.session
     session.refresh_from_db()
     if session.current_phase != QuizSession.Phase.OPTIONS:
