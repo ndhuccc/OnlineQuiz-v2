@@ -36,7 +36,13 @@ def _question_review_entry(participant: Participant, question_index: int, questi
         )
 
     options_display = [
-        {"letter": o.letter, "label_text": o.label_text}
+        {
+            "id": o.id,
+            "letter": o.letter,
+            "label_text": o.label_text,
+            "is_correct": o.is_correct,
+            "is_your_answer": o.id in (answer.selected_option_ids if answer else []),
+        }
         for o in question.options.order_by("sort_order")
     ]
 

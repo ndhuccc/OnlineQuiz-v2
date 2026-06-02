@@ -710,6 +710,32 @@ onUnmounted(() => {
             </span>
           </div>
 
+          <div v-if="questionResult.stem_text" class="rounded-lg bg-slate-50 p-3 text-sm text-slate-800">
+            <MathText :content="questionResult.stem_text" />
+          </div>
+
+          <ul v-if="questionResult.options && questionResult.options.length" class="space-y-1 text-sm">
+            <li
+              v-for="opt in questionResult.options"
+              :key="opt.id"
+              class="flex items-start gap-2 rounded border px-2 py-1"
+              :class="opt.is_your_answer && opt.is_correct
+                ? 'border-green-300 bg-green-50'
+                : opt.is_your_answer
+                  ? 'border-red-300 bg-red-50'
+                  : opt.is_correct
+                    ? 'border-green-300 bg-green-50/50'
+                    : 'border-slate-200'"
+            >
+              <span class="font-mono font-bold">{{ opt.letter }}.</span>
+              <span class="flex-1">
+                <MathText :content="opt.label_text" />
+              </span>
+              <span v-if="opt.is_your_answer" class="text-xs text-slate-600">（你的）</span>
+              <span v-if="opt.is_correct" class="text-xs font-semibold text-green-700">正解</span>
+            </li>
+          </ul>
+
           <div v-if="questionResult.your_answer" class="text-sm">
             <span class="text-slate-500">你的答案：</span>
             <span

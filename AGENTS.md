@@ -1,5 +1,36 @@
 # OnlineQuiz-v2 — Project Notes
 
+## Backend architecture: 兩套 API handler（必讀）
+
+**坑點**：這個專案的 `/api/sessions/`（以及所有 `/api/...` 路由）有**兩套實作**，瀏覽器只會打到其中一套。
+
+- **DRF view** — `backend/quiz/api/session_views.py`（掛在 `config/urls.py`，由 `manage.py runserver` port 8000 服務）。**只給 pytest 用**。
+- **Flask handler** — `backend/run_flask.py`（port 5000，Vite 把 `/api/*` proxy 過來）。**這才是瀏覽器實際打到的**。
+
+修任何 session 端點時，**兩個檔案都要改**。我之前只改 DRF，Flask 端 session_create 還是用舊的 `bank_id` 邏輯，silently 忽略 `mode` 欄位，前端選「評量講解」永遠被降成 AUTO。
+
+驗證方法：直接打 port 5000 的 `POST /api/sessions/`，看 response 有沒有新欄位。
+
+## Flask 沒開 auto-reload
+
+`run_flask.py:825` 用 `app.run(host=..., port=..., threaded=True)`，**沒 `debug=True` 也沒 `use_reloader=True`**。改後端程式碼後**必須手動重啟 Flask**：
+
+```powershell
+# 找到占用 5000 的 PID 並殺掉
+netstat -ano | Select-String ":5000.*LISTENING" | ForEach-Object {
+    ($_ -replace ".*\s+(\d+)$", '$1')
+} | Sort-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
+
+# 重啟
+cd backend
+Start-Process -FilePath ".\.venv\Scripts\python.exe" `
+  -ArgumentList "run_flask.py" `
+  -RedirectStandardOutput "flask.log" -RedirectStandardError "flask.err" `
+  -WindowStyle Hidden
+```
+
+（不建議在 dev 開 auto-reload：multi-process 會跟 pytest 搶 DB state。）
+
 ## Product Modes (重要)
 
 這個專案規劃有兩種測驗模式，**目前只有「純自動模式」實作**，「評量與講解模式」是未來 roadmap。
