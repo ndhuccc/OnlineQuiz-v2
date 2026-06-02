@@ -11,12 +11,32 @@
 - 收尾觸發：計時逾時 OR 全員提交（任一成立就收）
 - 進入下一題的決策**應該在 server**——老師的瀏覽器不該是必要條件
 
-### 2. 評量與講解模式（future, 未實作）
-- 老師逐題開放
-- 學生提交 → 立即評分（學生端可看對錯）
-- 老師講解
-- 老師按「下一題」繼續
-- 需要手動 pacing，需要 session mode flag 區分
+### 2. 評量與講解模式（manual, 已實作 2026-06-02）
+
+老師逐題控制流程：每題 STEM → OPTIONS → CLOSED → 講解 → 下一題。
+
+**Server FSM 行為**：
+- `start_session()` 在 MANUAL 模式停在 STEM（不自動開 options），老師必須按「開放選項」
+- `next_question()` 在 MANUAL 模式保持新題的 STEM（不自動開 options）
+- `_close_options_phase()` 在 MANUAL 模式不排程 auto-advance
+- `set_phase("closed", ...)` 走 `_set_phase_locked` 在 MANUAL 也不排程
+
+**API 契約**：
+- Submit response 仍回 `is_full_score` + `score`（**立即評分**）
+- 新端點 `GET /api/participants/me/question_result/`
+  - STEM / OPTIONS 階段回 403「本題尚未結束」（避免洩題）
+  - CLOSED / REVIEW 回傳正解 + your_answer + 分數 + 解析
+- `start_session()` 在 MANUAL 設 `current_phase=STEM`（AUTO 直接 OPTIONS）
+
+**前端契約**：
+- QuizView：phase 變 CLOSED 時自動 fetch `/question_result/` 顯示在卡片
+  - 顯示「答對/答錯」徽章、your_answer、correct_answer（錯才顯示正解）、解釋（KaTeX）
+- SessionView：sticky header 有 mode 徽章（純自動/評量講解），投影文字依 mode 變化
+  - MANUAL + STEM: 「題幹階段，準備好請按『開放選項』」
+  - MANUAL + CLOSED: 「本題已結束，學生可看結果。講解完畢請按『下一題』」
+- 「開放選項 & 開始計時」按鈕在 MANUAL 模式是**必按**（不是選用）
+
+**測試**：`test_manual_mode.py` 8 個案例（DRF test client，含 STEM/OPTIONS 403 gate、CLOSE 後可看、錯答、下一題仍 STEM、解析文字）。`test_session_mode.py` 3 個 mode 欄位測試。`test_auto_advance.py` 已涵蓋 MANUAL 不 auto-advance。
 
 ## 架構特性
 
