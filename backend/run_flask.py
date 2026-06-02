@@ -321,7 +321,10 @@ def session_create():
     if err:
         return err
     try:
-        session = create_session(ser.validated_data["bank_id"])
+        session = create_session(
+            ser.validated_data["bank_id"],
+            mode=ser.validated_data["mode"],
+        )
     except SessionError as exc:
         return _json_error(exc)
     return jsonify(
@@ -331,6 +334,7 @@ def session_create():
             "host_token": session.host_token,
             "join_url": join_url_for_session(session),
             "bank_id": session.bank_id,
+            "mode": session.mode,
             "total_questions": len(session.question_ids),
         }
     ), 201
