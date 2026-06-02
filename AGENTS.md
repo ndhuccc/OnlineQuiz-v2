@@ -44,6 +44,16 @@
   - 但 UX 不夠明確（舊分頁只是莫名其妙被登出）
   - 建議改成顯式契約：例如 `last_seen_at` + 409 Conflict 提示「其他分頁正在使用」
 
+## join_session() 的 rejoin 契約（2026-06-02 修補）
+
+`join_session()` 對**既有** participant 一律允許 rejoin（不管 lobby 還是 running）：
+
+- **lobby rejoin**：client_token 掉了（關分頁、清 localStorage）的學生能重新取得 token。`start_question_index` 保持 0，`joined_at` 保留不重設。
+- **mid-quiz rejoin**：`start_question_index` 設為當前題，避免看到/補交之前的題。
+- **新學號 mid-quiz**：仍拒絕（"測驗進行中，無法新加入"）。
+
+**重要**：原本 `if existing: raise "此學號已加入本場次"` 這個寫法是**錯誤的**——它把 lobby 階段的 rejoin 也擋掉了。Rescue 機制原本只補 mid-quiz 缺口，沒覆蓋 lobby。**拿掉 rescue 後一定要把 lobby rejoin 也打開**，否則使用者會卡死（手動驗證時親身踩到）。
+
 ## FSM auto-advance 設計洞（2026-06-02）
 
 純自動模式下，server 才是 timer 唯一真理來源，但目前 `next_question()` 由老師前端的 `maybeAutoAdvanceQuestion()` 觸發——意思是老師瀏覽器關掉就卡住。
