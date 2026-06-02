@@ -1,4 +1,4 @@
-"""In-process timers for question phase auto-submit."""
+"""In-process timers for question phase auto-submit and auto-advance."""
 from __future__ import annotations
 
 import logging
@@ -54,6 +54,61 @@ class TimerService:
 
 
 timer_service = TimerService()
+
+
+class AdvanceScheduler:
+    """排程 session 在指定 delay 後呼叫 on_fire()。
+
+    一個 session 同時只允許一個 pending advance。當 next_question() 觸發或
+    session 進入 review/closed 時應呼叫 cancel(session_id)。
+    """
+
+    def __init__(self) -> None:
+        self._timers: dict[int, threading.Timer] = {}
+        self._lock = threading.Lock()
+
+    def schedule(self, session_id: int, delay_seconds: float, on_fire: Callable[[], None]) -> None:
+        def run():
+            from django.db import close_old_connections
+
+            close_old_connections()
+            with self._lock:
+                self._timers.pop(session_id, None)
+            try:
+                on_fire()
+            except Exception:
+                logger.exception("Advance scheduler callback failed session=%s", session_id)
+
+        with self._lock:
+            self._cancel_locked(session_id)
+            timer = threading.Timer(delay_seconds, run)
+            timer.daemon = True
+            self._timers[session_id] = timer
+            timer.start()
+
+    def _cancel_locked(self, session_id: int) -> None:
+        timer = self._timers.pop(session_id, None)
+        if timer:
+            timer.cancel()
+
+    def cancel(self, session_id: int) -> None:
+        with self._lock:
+            self._cancel_locked(session_id)
+
+    def cancel_all(self) -> None:
+        with self._lock:
+            sessions = list(self._timers.keys())
+            self._timers.clear()
+        for sid in sessions:
+            with self._lock:
+                self._cancel_locked(sid)
+
+    def is_pending(self, session_id: int) -> bool:
+        with self._lock:
+            return session_id in self._timers
+
+
+advance_scheduler = AdvanceScheduler()
 
 _session_mutexes: dict[int, threading.Lock] = {}
 _meta_lock = threading.Lock()
