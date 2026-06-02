@@ -100,6 +100,7 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
     ],
+    "EXCEPTION_HANDLER": "quiz.api.auth_helpers.custom_exception_handler",
 }
 
 # 開發時允許 Vue 前端跨埠呼叫 API

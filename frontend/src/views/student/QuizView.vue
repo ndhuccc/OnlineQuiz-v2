@@ -5,7 +5,7 @@ import MathText from "@/components/MathText.vue";
 import StudentLayout from "@/components/StudentLayout.vue";
 import TimerBar from "@/components/TimerBar.vue";
 import { mergeTimerFields, studentLobbyPollIntervalMs, studentPollIntervalMs, usePhaseCountdown } from "@/composables/usePhaseCountdown";
-import { authHeaders, clearClientToken, getClientToken, saveClientToken, getLoginSession } from "@/composables/useAuth";
+import { authHeaders, clearClientToken, getClientToken, getTabId, saveClientToken, getLoginSession } from "@/composables/useAuth";
 import { parseJsonResponse } from "@/utils/parseJsonResponse";
 
 const router = useRouter();
@@ -262,6 +262,9 @@ function leaveAndRejoin() {
   }
 }
 
+// Expose helper for resetters in template
+defineExpose({ leaveAndRejoin });
+
 async function join() {
   error.value = "";
   joining.value = true;
@@ -278,12 +281,14 @@ async function join() {
         join_code: joinCode.value.trim().toUpperCase(),
         student_no: studentNo.value.trim(),
         display_name: displayName.value.trim(),
+        tab_id: getTabId() || "",
       }),
     });
     const data = await parseJsonResponse(res);
     if (!res.ok) throw new Error(data.detail || "加入場次失敗。");
     clientToken = data.client_token;
-    saveClientToken(clientToken);
+    const participantId = data.participant?.id;
+    saveClientToken(clientToken, participantId);
     applyParticipantState({ ...data.session, has_answered: false });
     enterQuizPhase();
   } catch (e) {
@@ -309,6 +314,16 @@ async function fetchParticipantState({ showSyncing = true } = {}) {
       phase.value = "join";
       state.value = null;
       error.value = "登入已失效，請重新輸入學號與姓名加入場次。";
+      return null;
+    }
+    if (res.status === 409) {
+      // 另一個分頁已接管此測驗
+      clientToken = null;
+      clearClientToken();
+      stopPolling();
+      phase.value = "join";
+      state.value = null;
+      error.value = "另一個分頁已接管此測驗，請重新加入。";
       return null;
     }
     const data = await parseJsonResponse(res).catch(() => null);
