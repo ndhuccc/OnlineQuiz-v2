@@ -30,6 +30,38 @@
 
 ## 快速開始（開發）
 
+### 0. 一鍵啟動（推薦，Windows）
+
+不用手動開兩個 terminal，雙擊即可：
+
+```cmd
+start-dev.bat
+```
+
+這個腳本會：
+1. 殺掉殘留的 `:5000` / `:5173` 進程（避免 Vite proxy 抓錯的 Flask）
+2. 在**隱藏視窗**背景啟動 Flask（`:5000`）+ Vite（`:5173`）
+3. 印出兩個服務的 PID 與健康狀態
+
+停掉：
+
+```cmd
+stop-dev.bat
+```
+
+**日誌位置**（用 `Get-Content <log> -Wait` 持續監看）：
+- `backend/flask.log` / `backend/flask.err`
+- `frontend/vite.out.log` / `frontend/vite.err.log`
+
+**PowerShell 用法：**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-dev.ps1
+powershell -ExecutionPolicy Bypass -File .\stop-dev.ps1
+```
+
+> 想看即時 console 輸出（可關掉視窗直接停止），改用 `scripts\restart-dev.bat`（會開兩個可見 cmd 視窗）。
+
 ### 1. 後端
 
 **PowerShell（Windows）：**

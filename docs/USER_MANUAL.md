@@ -226,7 +226,43 @@ graph TD
 
 ---
 
-## ❓ 七、 常見問題排除 (FAQ)
+## 🛠️ 七、 開發者專區：環境啟動腳本
+
+為避免每次手動開兩個 terminal（Flask + Vite）並切換目錄，專案提供一鍵啟動 / 停止腳本，位於**專案根目錄**：
+
+| 檔案 | 用途 |
+|------|------|
+| `start-dev.bat` / `start-dev.ps1` | 殺掉殘留的 `:5000` / `:5173`，背景啟動 Flask + Vite |
+| `stop-dev.bat` / `stop-dev.ps1` | 停掉 Flask + Vite |
+
+**使用方式（Windows）：**
+
+- 雙擊 `start-dev.bat`（或在 cmd 輸入 `start-dev`）
+- PowerShell 需繞過執行政策：`powershell -ExecutionPolicy Bypass -File .\start-dev.ps1`
+- 結束：雙擊 `stop-dev.bat`
+
+**日誌位置：**
+- `backend/flask.log` / `backend/flask.err` — Flask 輸出與錯誤
+- `frontend/vite.out.log` / `frontend/vite.err.log` — Vite 輸出與錯誤
+
+持續監看（PowerShell）：`Get-Content .\backend\flask.log -Wait`
+
+**兩個變體的差異：**
+
+| 腳本 | 視窗 | 適用情境 |
+|------|------|----------|
+| `start-dev.bat`（根目錄） | **隱藏**視窗，log 寫到檔案 | 平常開發、CI 自動化、想讓桌面乾淨 |
+| `scripts\restart-dev.bat` | **可見** cmd 視窗，輸出直接看 | 初次除錯、想即時看到 console |
+
+兩者都會先殺掉殘留的 :5000 / :5173，再啟動服務。
+
+**為何 Flask 預設沒開 auto-reload？**
+
+`run_flask.py` 用 `app.run(...)` 啟動，**沒有 `debug=True` 也沒有 `use_reloader=True`**。改後端程式碼後**必須手動重啟** Flask，否則 Vite HMR 抓得到前端改動但後端改動不會生效。執行 `stop-dev.bat` 再 `start-dev.bat` 即可。
+
+---
+
+## ❓ 八、 常見問題排除 (FAQ)
 
 ### Q1：學生登入時一直顯示「連線失敗或帳密錯誤」？
 * **A：**
