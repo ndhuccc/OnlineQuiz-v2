@@ -520,7 +520,7 @@ onUnmounted(() => {
                 class="border-b"
               >
                 <td class="py-2">Q{{ item.question_index + 1 }}</td>
-                <td class="max-w-xs truncate">{{ item.category }}</td>
+                <td class="max-w-xs truncate"><MathText :content="item.category" /></td>
                 <td>{{ ((item.answer_rate || 0) * 100).toFixed(0) }}%</td>
                 <td>{{ item.full_score_count }} / {{ item.submitted_count }}</td>
               </tr>
@@ -693,8 +693,21 @@ onUnmounted(() => {
             <h2 class="text-3xl font-semibold lg:text-4xl">
               第 {{ questionNumber }} 題 / {{ state.total_questions }}
             </h2>
-            <p class="mt-1 text-base text-slate-300 lg:text-lg">
-              {{ state.stem?.category || "Uncategorized" }} · {{ state.stem?.points }} 分
+            <p class="mt-1 text-2xl text-slate-300 lg:text-3xl">
+              <MathText
+                :content="state.stem?.category || 'Uncategorized'"
+                text-class="text-[inherit]"
+              />
+              · {{ state.stem?.points }} 分
+            </p>
+            <p
+              v-if="state.join_code"
+              class="mt-3 flex flex-wrap items-baseline gap-x-3 text-base text-slate-300 lg:text-lg"
+            >
+              <span class="uppercase tracking-[0.2em]">邀請碼</span>
+              <span class="font-mono text-3xl font-bold tracking-[0.3em] text-amber-300 lg:text-4xl">
+                {{ state.join_code }}
+              </span>
             </p>
           </div>
           <div class="min-w-[280px] flex-1 max-w-xl">
@@ -721,13 +734,13 @@ onUnmounted(() => {
           </button>
         </header>
 
-        <main class="flex min-h-0 flex-1 items-center justify-center overflow-auto px-6 py-8 lg:px-12 lg:py-10">
-          <div class="teacher-stem-projection w-full max-w-6xl">
+        <main class="flex min-h-0 flex-1 items-center justify-start overflow-auto px-6 py-8 lg:px-12 lg:py-10">
+          <div class="teacher-stem-projection w-full max-w-none">
             <MathText
               v-if="state.stem"
               :content="state.stem.stem_text"
               block
-              text-class="text-3xl lg:text-5xl xl:text-6xl leading-relaxed text-white"
+              text-class="text-[inherit]"
             />
           </div>
         </main>
@@ -807,6 +820,17 @@ onUnmounted(() => {
   margin: 0.6em 0;
 }
 
+.teacher-stem-projection {
+  font-size: 2.8125em;
+}
+
+.teacher-stem-projection :deep(.math-content) {
+  font-size: inherit;
+  line-height: 1.6;
+  width: 100%;
+  max-width: none;
+}
+
 .teacher-stem-projection :deep(.katex) {
   font-size: 1.08em;
   color: #fff;
@@ -814,6 +838,8 @@ onUnmounted(() => {
 
 .teacher-stem-projection :deep(.katex-display) {
   margin: 0.75em 0;
+  width: 100%;
+  max-width: none;
 }
 
 .teacher-sidebar-btn {

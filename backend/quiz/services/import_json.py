@@ -11,7 +11,7 @@ from quiz.models import Option, Question, QuestionBank
 
 from .schemas import ImportPayload, ImportQuestionItem
 
-OPTION_PREFIX_RE = re.compile(r"^([A-Z])\.\s*(.*)$", re.DOTALL)
+LEGACY_LETTER_PREFIX_RE = re.compile(r"^([A-Z])\.\s+(.*)$", re.DOTALL)
 FORMAT_TO_TYPE = {
     "Single Choice": Question.Type.SINGLE,
     "Multiple Choice": Question.Type.MULTIPLE,
@@ -36,11 +36,28 @@ class ImportResult:
         return self.bank_id is not None and self.imported_count > 0
 
 
-def parse_option_line(line: str) -> tuple[str, str]:
-    m = OPTION_PREFIX_RE.match(line.strip())
-    if not m:
-        raise ValueError(f"選項格式錯誤，需以「A. 」開頭：{line[:40]}...")
-    return m.group(1), m.group(2).strip()
+def normalize_option_text(raw: str) -> str:
+    """Normalize an option's text content.
+
+    The standard JSON format uses ``[option text (English mirror)]`` with
+    no letter prefix — the option letter is determined by array position.
+    For backward compatibility with the older ``"A. xxx"`` format we also
+    strip a leading ``"<letter>. "`` if present.
+    """
+    if not raw:
+        return raw
+    s = raw.strip()
+    m = LEGACY_LETTER_PREFIX_RE.match(s)
+    return m.group(2).strip() if m else s
+
+
+def parse_option_line(letter: str, text: str) -> tuple[str, str]:
+    """Return ``(letter, normalized_text)`` for an option at a given position.
+
+    The letter is supplied by the caller (derived from array index); only
+    the text needs normalization.
+    """
+    return letter, normalize_option_text(text)
 
 
 def parse_correct_letters(answer: str, available: set[str], qtype: str) -> set[str]:
@@ -60,12 +77,17 @@ def validate_question_row(item: ImportQuestionItem) -> tuple[Question.Type, list
     parsed_options: list[tuple[str, str]] = []
     letters_seen: set[str] = set()
 
-    for raw in item.options:
-        letter, text = parse_option_line(raw)
+    for idx, raw in enumerate(item.options):
+        if idx >= 26:
+            raise ValueError("選項數量超過 26 個 (A-Z)")
+        letter = chr(ord("A") + idx)
         if letter in letters_seen:
             raise ValueError(f"選項字母重複：{letter}")
-        letters_seen.add(letter)
-        parsed_options.append((letter, text))
+        letter_out, text = parse_option_line(letter, raw)
+        if not text:
+            raise ValueError(f"選項 {letter} 內容為空")
+        letters_seen.add(letter_out)
+        parsed_options.append((letter_out, text))
 
     correct = parse_correct_letters(item.correct_answer, letters_seen, qtype)
     return qtype, parsed_options, correct

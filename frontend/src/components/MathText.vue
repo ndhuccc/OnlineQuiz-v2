@@ -12,23 +12,38 @@ const root = ref(null);
 
 function renderLatex(text) {
   if (!text) return "";
-  let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
+  // 1) Pull LaTeX blocks out and render them first; remember rendered HTML
+  //    in `latexBlocks`, and leave a placeholder in the source string. This
+  //    protects `&` (matrix column separator), `<`, `>` inside LaTeX from
+  //    the HTML-escape step below.
+  const latexBlocks = [];
+  const stamp = (rendered) => {
+    latexBlocks.push(rendered);
+    return `\x00LATEX${latexBlocks.length - 1}\x00`;
+  };
+
+  let html = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
     try {
-      return katex.renderToString(tex.trim(), { displayMode: true, throwOnError: false });
+      return stamp(katex.renderToString(tex.trim(), { displayMode: true, throwOnError: false }));
     } catch {
-      return `<span class="text-red-500">[LaTeX]</span>`;
+      return stamp(`<span class="text-red-500">[LaTeX]</span>`);
     }
   });
 
   html = html.replace(/\$([^$\n]+?)\$/g, (_, tex) => {
     try {
-      return katex.renderToString(tex.trim(), { displayMode: false, throwOnError: false });
+      return stamp(katex.renderToString(tex.trim(), { displayMode: false, throwOnError: false }));
     } catch {
-      return `$${tex}$`;
+      return stamp(`$${tex}$`);
     }
   });
+
+  // 2) HTML-escape only the plain text portions (LaTeX is now placeholders).
+  html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // 3) Re-substitute the rendered LaTeX blocks.
+  html = html.replace(/\x00LATEX(\d+)\x00/g, (_, idx) => latexBlocks[Number(idx)]);
 
   return html.replace(/\n/g, "<br />");
 }
